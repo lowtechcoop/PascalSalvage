@@ -1,0 +1,63 @@
+leechmaster 3000 protocol spec 1.0
+==================================
+
+
+connecting
+==========
+
+TCP, port 0x690 :p
+
+"logging in"
+============
+
+The server will not send you a banner of any kind
+send:
+LM3K 1000 blah\r\n
+(where blah is whatever you want - it just shows up on the debug console anyway - i use it for user-agent ids :)
+it will reply with
+LM3K 1000 ok\r\n 
+or similar (only the LM3K 1000 bits are important)
+
+That's it. Note theres a 30 second inactivity timeout.
+
+Client->Server commands
+=======================
+
+standard 3 digit code then data system
+(note that all the \r\n's mean CR/LF - ie don't stick them in there literally, ranzer :p )
+
+theres just
+
+198 quit\r\n  <-- pretty obvious
+
+110 [spec]\r\n
+search spec for case insensitive substring search on names
+no search on filesizes yet, or any fancy wildcarding.
+except * by itself returns everything
+
+111 whatever\r\n <-- prints a test string
+
+112 whatever\r\n <-- prints a test string
+
+Server->Client commands
+=======================
+
+100 filesize fullpath\r\n  <-- you'll get a lot of these
+
+199 list ends\r\n
+
+200 random shite\r\n 
+this one's for displaying the MOTD. it gets shoved at you just after the
+LM3K 1000 ok etc on 'login'. Display it's contents somewhere prominent biatches!
+
+
+Discovery protocol
+==================
+
+broadcast "LM3K something something\r\n" on UDP port 0x690
+The server will reply back to you with "LM3K" something
+
+
+
+
+
