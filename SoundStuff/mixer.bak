@@ -1,0 +1,936 @@
+{  -----------------------  UNIT FILES ----------------------- }
+
+{$A+,B-,D+,E-,F-,G+,I-,L+,N-,O-,P-,Q-,R-,S-,T-,V+,X+,Y+}
+{$M 16384,0,655360}
+
+unit mixer;
+
+{ Program by Borek (Marcin Borkowski), Warsaw, Poland.
+  You can find me in a Top Secret BBS, +48 2 6788783
+  Fido 2:480/25, Pascal Net 115:4804/104
+
+  You may freely copy and use this source, as long it is
+  unchanged and states my name in the begining. If you find
+  more profitable use of this code, fell free to share your
+  profits with me! At least - let me know you were able to
+  use it for your own purposes.
+
+  This unit should be accompanied by the MODPLAY source.
+
+  This version of mixing (even at 44 kHz) works OK on my
+  UMC 40 MHz machine (that's a little bit less than 486 50 MHz).
+  If you want to make it work on 386DX 33MHz, you must 'unroll'
+  the main loop and put used there data into 'hardcoded' variables.
+  Such a version works on my old 386 and on several other
+  computers of the same class, even with QEMM.
+
+  If you stop this program by ctrl break, you may not be able to
+  restart it without resetting your computer - and that's not the
+  only one bug I know in the code.
+
+  Parts of code ripped from PCPGE, various sources from
+  Ethan Brodsky and probably from SWAG. I can't remember
+  source of every byte, but for sure 95% of code is mine. }
+
+interface
+
+procedure addvoice(voice,_samplesize,_loopstart,_loopend : word;
+                   sample : pointer);
+procedure startchannel(channel,voice,volume,frequency : word);
+procedure stopchannel(channel : word);
+procedure setchannelfrequency(channel,frequency : word);
+procedure setchannelvolume(channel,volume : word);
+
+implementation
+
+uses crt,dos;
+
+const
+{ Mixer data }
+  max_num_voices = 32; { number of voices }
+  max_num_channels = 4; { number of channels }
+  PlayFreq = 22222; { samples played at, at 11111 sound is very bad. }
+  playbufsize = 512; { Size of play buffer}
+{ SB data - change it for your card settings. }
+  SBIO    : word = 2;  { 2x0 }
+  SBIRQ   : word = 7;
+
+type
+  sampledata = array[0..65533]of byte;
+  _channel   = record
+                 nvoice,position,increment,subposition,vol : word;
+                 inloop,active : boolean
+               end;
+
+var
+{ Pointers to samples. }
+  voicesdata : array[1..max_num_voices]of ^sampledata;
+{ Sizes of voices }
+  voicessize : array[1..max_num_voices]of word;
+{ Those two defines begining and end of loop in sample }
+  voicesloopstart : array[1..max_num_voices]of word;
+  voicesloopend : array[1..max_num_voices]of word;
+{ Voice ready to use? }
+  voicesdefined : array[1..max_num_voices]of boolean;
+{ Which voice played in this channel? }
+  channelsnvoice : array[1..max_num_channels]of word;
+{ Which position in sample? }
+  channelsposition : array[1..max_num_channels]of word;
+{ How to increment subposition? }
+  channelsincrement : array[1..max_num_channels]of word;
+{ Which subposistion in position - it allows to change frequencies,
+  as one byte of sample can be played several times. It gives not a
+  perfect sound, but it works. To improove sound quality, one should
+  use interpolation (and assembler :-) }
+  channelssubposition : array[1..max_num_channels]of word;
+{ Volume of channel }
+  channelsvol : array[1..max_num_channels]of word;
+{ Is sample in this channel loop? }
+  channelsinloop : array[1..max_num_channels]of boolean;
+{ Channel being played? }
+  channelsactive : array[1..max_num_channels]of boolean;
+
+{ SB addresses }
+  DSP_RESET        : word;
+  DSP_READ_DATA    : word;
+  DSP_WRITE_DATA   : word;
+  DSP_WRITE_STATUS : word;
+  DSP_DATA_AVAIL   : word;
+
+  timeconst        : byte;
+  playbuf          : pointer;
+  oldint,oldexit   : pointer;
+  firstbuff        : boolean;
+
+function carry : boolean;
+inline($B0/$01/     {  mov al,01 }
+       $72/$02/     {  jc @carryset }
+       $30/$C0);    {  xor al,al }
+                    { @carryset: }
+
+function ResetDSP(base : word) : boolean;
+begin
+  base := base * $10;
+  DSP_RESET := base + $206;
+  DSP_READ_DATA := base + $20A;
+  DSP_WRITE_DATA := base + $20C;
+  DSP_WRITE_STATUS := base + $20C;
+  DSP_DATA_AVAIL := base + $20E;
+  Port[DSP_RESET] := 1;
+  Delay(1);
+  Port[DSP_RESET] := 0;
+  Delay(1);
+  if (Port[DSP_DATA_AVAIL] And $80 = $80) And (Port[DSP_READ_DATA] = $AA)
+     then ResetDSP := true
+     else ResetDSP := false;
+end;
+
+procedure WriteDSP(value : byte);
+begin
+  while Port[DSP_WRITE_STATUS] And $80 <> 0 do;
+  Port[DSP_WRITE_DATA] := value;
+end;
+
+function ReadDSP : byte;
+begin
+  while Port[DSP_DATA_AVAIL] and $80 = 0 do;
+  ReadDSP := Port[DSP_READ_DATA];
+end;
+
+function SpeakerOn: byte;
+begin
+  WriteDSP($D1);
+end;
+
+function SpeakerOff: byte;
+begin
+  WriteDSP($D3);
+end;
+
+procedure Playback;
+var
+  page,offset,size   : word;
+begin
+{ SB and DMA are working in autoinit modes - but DMA buffer is
+  twice as long as SB buffer. Each time SB buffer is finished an
+  IRQ is generated - a signal that next part of samples should be
+  mixed. Play buffer has two parts - when one is played, second
+  is being filled. Simple, uh? This version of procedure was checked
+  on AWE 32, on SB 16 and on several clones of SB, but for sure
+  it'll not work on some cards - especially on older versions
+  that are not supporting autoinit mode. }
+  firstbuff:=true;
+  size := playbufsize-1;
+  offset := Seg(playbuf^) Shl 4 + Ofs(playbuf^);
+  page := (Seg(playbuf^) + Ofs(playbuf^) shr 4) shr 12;
+{ DMA programming }
+  Port[$0A] := 5;
+  Port[$0C] := 0;
+  Port[$0B] := $59; { DMA autoinit }
+  Port[$02] := Lo(offset);
+  Port[$02] := Hi(offset);
+  Port[$83] := page;
+  Port[$03] := Lo(size);
+  Port[$03] := Hi(size);
+  Port[$0A] := 1;
+{ SB programming }
+  WriteDSP($40);
+  WriteDSP(timeconst);
+  WriteDSP($48); { 8-bit sample type with autoinit}
+  WriteDSP(Lo(playbufsize shr 1-1));
+  WriteDSP(Hi(playbufsize shr 1-1));
+  WriteDSP($1C) {???? I don't know why, but it is necessary }
+end;
+
+procedure mix;
+{ Main procedure - mixes samples with appropriate frequencies and
+  puts mixed signal into play buffer. If it's too slow for your
+  computer, don't blame me - but translate procedure into assembler
+  (or buy something faster :-) }
+var
+  i,j : integer;
+  nvoice,sw  : word;
+  pombuf : ^sampledata;
+begin
+{ Pointer to play buffer - is it first, or second part? }
+  if firstbuff then pombuf:=@sampledata(playbuf^)[playbufsize div 2]
+               else pombuf:=playbuf;
+  for i:=0 to playbufsize div 2-1 do
+  begin
+    sw:=0;
+    for j:=1 to max_num_channels do
+      if channelsactive[j] then
+      begin
+        nvoice:=channelsnvoice[j];
+{ That's mixing - without interpolation. }
+        inc(sw, voicesdata[nvoice]^[channelsposition[j]] * channelsvol[j]);
+{ Here is the most important thing - next two lines (excluding
+  remarks:) are responsible for output frequency of sample.  }
+        inc(channelssubposition[j],channelsincrement[j]);
+{ That's a nasty trick - but it works. You can do it other ways,
+  in Pascal, Assembler and so on. }
+        if carry then inc(channelsposition[j]);
+{ Now work with looped samples. }
+        if channelsinloop[j] then
+          if channelsposition[j] > voicesloopend[nvoice] then
+                 channelsposition[j] := voicesloopstart[nvoice];
+{ Maybe we should stop playing this sample? Or put it in a loop mode? }
+        if channelsposition[j] > voicessize[nvoice] then
+          if voicesloopstart[nvoice]<>0 then
+          begin
+            channelsposition[j] := voicesloopstart[nvoice];
+            channelsinloop[j]:=true
+          end
+          else channelsactive[j]:=false;
+      end;
+    pombuf^[i]:=Lo(sw shr 6);
+  end;
+end;
+
+procedure inthandler;
+interrupt;
+var
+  w : word;
+begin
+  w:=Port[DSP_DATA_AVAIL];
+  port[$20]:=$20;
+  firstbuff:=not firstbuff;
+  mix;
+end;
+
+procedure enableIRQ(n : byte);
+begin
+  port[$21]:=port[$21] and not (1 shl n)
+end;
+
+procedure disableIRQ(n : byte);
+begin
+  port[$21]:=port[$21] or (1 shl n)
+end;
+
+procedure allocmem(var p : pointer);
+var
+  adr : longint;
+begin
+{ Allocates memory not crossing page boundary ($X0000) }
+  repeat
+    getmem(p,playbufsize);
+    adr:=longint(Seg(p^)) Shl 4 + Ofs(p^);
+  until (adr and $FFFF)<$FFFF-playbufsize
+end;
+
+{$F+ }
+procedure MixerExit;
+begin
+  ExitProc:=OldExit;
+  WriteDSP($D0); { ??? }
+  speakeroff;
+  disableIRQ(SBIRQ);
+  setintvec(8+SBIRQ,oldint);
+  ResetDSP(SBIO);
+end;
+{$F- }
+
+procedure initplayloop;
+begin
+  if not ResetDSP(SBIO) then HALT;
+  allocmem(playbuf);
+  getintvec(8+SBIRQ,oldint);
+  setintvec(8+SBIRQ,@inthandler);
+  enableIRQ(SBIRQ);
+  speakeron;
+  timeconst:=256-1000000 div PlayFreq;
+  fillchar(playbuf^,playbufsize,#0);
+  playback;
+  OldExit:=ExitProc;
+  ExitProc:=@MixerExit
+end;
+
+procedure addvoice(voice,_samplesize,_loopstart,_loopend : word;
+                   sample : pointer);
+begin
+  voicesdata[voice]:=sample;
+  voicessize[voice]:=_samplesize;
+  voicesloopstart[voice]:=_loopstart;
+  voicesloopend[voice]:=_loopend;
+  voicesdefined[voice]:=true
+end;
+
+procedure startchannel(channel,voice,volume,frequency : word);
+begin
+  asm cli end;
+  if not channelsactive[channel] then channelsactive[channel]:=true;
+  channelsinloop[channel]:=false;
+  channelsnvoice[channel]:=voice;
+  channelsincrement[channel]:=(longint(frequency) shl 16-1) div PlayFreq;
+  if (volume>=0) and (volume<=16) then channelsvol[channel]:=volume
+                                  else channelsvol[channel]:=16;
+  channelssubposition[channel]:=0;
+  channelsposition[channel]:=0;
+  asm sti end;
+end;
+
+procedure stopchannel(channel : word);
+begin
+  channelsactive[channel]:=false;
+  channelsinloop[channel]:=false
+end;
+
+procedure setchannelfrequency(channel,frequency : word);
+begin
+  asm cli end;
+  channelsincrement[channel]:=(longint(frequency) shl 16-1) div PlayFreq;
+  asm sti end;
+end;
+
+procedure setchannelvolume(channel,volume : word);
+begin
+  asm cli end;  {}
+  if (volume>=0) and (volume<=16) then channelsvol[channel]:=volume;
+  asm sti end;  {}
+end;
+
+begin
+  fillchar(voicesdata,sizeof(voicesdata),#0);
+  fillchar(voicessize,sizeof(voicessize),#0);
+  fillchar(voicesloopstart,sizeof(voicesloopstart),#0);
+  fillchar(voicesloopend,sizeof(voicesloopend),#0);
+  fillchar(voicesdefined,sizeof(voicesdefined),#0);
+  fillchar(channelsnvoice,sizeof(channelsnvoice),#0);
+  fillchar(channelsposition,sizeof(channelsposition),#0);
+  fillchar(channelsincrement,sizeof(channelsincrement),#0);
+  fillchar(channelssubposition,sizeof(channelssubposition),#0);
+  fillchar(channelsvol,sizeof(channelsvol),#0);
+  fillchar(channelsinloop,sizeof(channelsinloop),#0);
+  fillchar(channelsactive,sizeof(channelsactive),#0);
+  initplayloop
+end.
+                                                                                                                                                                                                                                                                                                                                                                                                     ÿÿÿÿì Á      b  ÿÿÿÿÈí  ÿÿÿÿÿÿÿÿÂ      4  ÿÿÿÿX   $ì Àñ Ã      r  ÿÿÿÿì @ì °ì Ä        ÿÿÿÿ$ì \ì ÿÿÿÿÅ      ×  ÿÿÿÿ@ì ÿÿÿÿxì Æ      /  ÿÿÿÿ@ì ”ì ÿÿÿÿÇ      0   ÿÿÿÿxì ÿÿÿÿÿÿÿÿÈ      o  ÿÿÿÿì ÿÿÿÿÌì É      é  ÿÿÿÿì ÿÿÿÿèì Ê      x  ÿÿÿÿì í üî Ë      2  ÿÿÿÿèì  í tí Ì      ÿ  ÿÿÿÿí ÿÿÿÿ<í Í      ò  ÿÿÿÿí Xí ÿÿÿÿÎ      4  ÿÿÿÿ<í ÿÿÿÿÿÿÿÿÏ      Û  ÿÿÿÿèì í äí Ğ      ÿ  ÿÿÿÿtí ÿÿÿÿ¬í Ñ      ò  ÿÿÿÿtí Èí ÿÿÿÿÒ      4  ÿÿÿÿ¬í ÿÿÿÿÿÿÿÿÓ        ÿÿÿÿèì  î pî Ô      ÿ  ÿÿÿÿäí ÿÿÿÿî Õ      ò  ÿÿÿÿäí 8î ÿÿÿÿÖ      4  ÿÿÿÿî ÿÿÿÿTî ×      ´  ÿÿÿÿî ÿÿÿÿÿÿÿÿØ      0  ÿÿÿÿèì Œî ÿÿÿÿÙ      ÿ  ÿÿÿÿpî ÿÿÿÿ¨î Ú      ò  ÿÿÿÿpî Äî ÿÿÿÿÛ      4  ÿÿÿÿ¨î ÿÿÿÿàî Ü      ´  ÿÿÿÿ¨î ÿÿÿÿÿÿÿÿİ        ÿÿÿÿì ÿÿÿÿÿÿÿÿŞ      ¸  ÿÿÿÿœ  4ï Ğô ß        ÿÿÿÿï ÿÿÿÿPï à      Å  ÿÿÿÿï ÿÿÿÿlï á      6  ÿÿÿÿï ˆï Tğ â      Ì  ÿÿÿÿlï ¤ï ÿÿÿÿã      0   ÿÿÿÿˆï ÿÿÿÿÀï ä      1   ÿÿÿÿˆï ÿÿÿÿÜï å      2   ÿÿÿÿˆï ÿÿÿÿ ğ æ              3   ÿÿÿÿˆï ÿÿÿÿğ ç      4   ÿÿÿÿˆï ÿÿÿÿ8ğ è      5   ÿÿÿÿˆï ÿÿÿÿÿÿÿÿé      .  ÿÿÿÿï ÿÿÿÿpğ ê      o  ÿÿÿÿï Œğ Äğ ë      3   ÿÿÿÿpğ ÿÿÿÿ¨ğ ì      2   ÿÿÿÿpğ ÿÿÿÿÿÿÿÿí      é  ÿÿÿÿï ÿÿÿÿàğ î      /  ÿÿÿÿï üğ 4ñ ï      0   ÿÿÿÿàğ ÿÿÿÿñ ğ      1   ÿÿÿÿàğ ÿÿÿÿÿÿÿÿñ      §  ÿÿÿÿï ÿÿÿÿPñ ò      .  ÿÿÿÿï ÿÿÿÿlñ ó        ÿÿÿÿï ÿÿÿÿˆñ ô      ¡  ÿÿÿÿï ÿÿÿÿ¤ñ õ      Â  ÿÿÿÿï ÿÿÿÿÿÿÿÿö        ÿÿÿÿX   ÿÿÿÿÜñ ÷        ÿÿÿÿX   øñ p÷ ø      r  ÿÿÿÿÜñ ò „ò ù        ÿÿÿÿøñ 0ò ÿÿÿÿú      ×  ÿÿÿÿò ÿÿÿÿLò û      /  ÿÿÿÿò hò ÿÿÿÿü      0   ÿÿÿÿLò ÿÿÿÿÿÿÿÿı      o  ÿÿÿÿÜñ ÿÿÿÿ ò ş      é  ÿÿÿÿÜñ ÿÿÿÿ¼ò        x  ÿÿÿÿÜñ Øò ÿÿÿÿ      2  ÿÿÿÿ¼ò ôò Hó       ÿ  ÿÿÿÿØò ÿÿÿÿó       ò  ÿÿÿÿØò ,ó ÿÿÿÿ      4  ÿÿÿÿó ÿÿÿÿÿÿÿÿ      Û  ÿÿÿÿ¼ò dó ¸ó       ÿ  ÿÿÿÿHó ÿÿÿÿ€ó       ò  ÿÿÿÿHó œó ÿÿÿÿ      4  ÿÿÿÿ€ó ÿÿÿÿÿÿÿÿ	        ÿÿÿÿ¼ò Ôó Dô 
+      ÿ  ÿÿÿÿ¸ó ÿÿÿÿğó       ò  ÿÿÿÿ¸ó ô ÿÿÿÿ      4  ÿÿÿÿğó ÿÿÿÿ(ô       ´  ÿÿÿÿğó ÿÿÿÿÿÿÿÿ      0  ÿÿÿÿ¼ò `ô ÿÿÿÿ      ÿ  ÿÿÿÿDô ÿÿÿÿ|ô       ò  ÿÿÿÿDô ˜ô ÿÿÿÿ      4  ÿÿÿÿ|ô ÿÿÿÿ´ô       ´  ÿÿÿÿ|ô ÿÿÿÿÿÿÿÿ      †  ÿÿÿÿœ  ìô ¨÷       h  ÿÿÿÿĞô ÿÿÿÿõ       É  ÿÿÿÿĞô ÿÿÿÿ$õ       B  ÿÿÿÿĞô ÿÿÿÿ@õ       /  ÿÿÿÿĞô \õ ”õ       0   ÿÿÿÿ@õ ÿÿÿÿxõ       1   ÿÿÿÿ@õ ÿÿÿÿÿÿÿÿ      é  ÿÿÿÿĞô ÿÿÿÿ°õ       o  ÿÿÿÿĞô Ìõ ö       2   ÿÿÿÿ°õ ÿÿÿÿèõ       3   ÿÿÿÿ°õ ÿÿÿÿÿÿÿÿ      .  ÿÿÿÿĞô ÿÿÿÿ ö       6  ÿÿÿÿĞô <ö  ÷        Ì  ÿÿÿÿ ö Xö ÿÿÿÿ!      2   ÿÿÿÿ<ö ÿÿÿÿtö "      1   ÿÿÿÿ<ö ÿÿÿÿö #      0   ÿÿÿÿ<ö ÿÿÿÿ¬ö $      3   ÿÿÿÿ<ö ÿÿÿÿÈö %      4   ÿÿÿÿ<ö ÿÿÿÿäö &      5   ÿÿÿÿ<ö ÿÿÿÿÿÿÿÿ'      Å  ÿÿÿÿĞô ÿÿÿÿ÷ (        ÿÿÿÿĞô ÿÿÿÿ8÷ )      §  ÿÿÿÿĞô ÿÿÿÿT÷ *      .  ÿÿÿÿĞô ÿÿÿÿÿÿÿÿ+      7  ÿÿÿÿX   Œ÷ ø ,      o  ÿÿÿÿp÷ ÿÿÿÿÿÿÿÿ-      Ş  ÿÿÿÿœ  Ä÷ Pø .      Å  ÿÿÿÿ¨÷ ÿÿÿÿà÷ /      .  ÿÿÿÿ¨÷ ÿÿÿÿü÷ 0      §  ÿÿÿÿ¨÷ ÿÿÿÿÿÿÿÿ1      Ï  ÿÿÿÿX   4ø Lù 2      o  ÿÿÿÿø ÿÿÿÿÿÿÿÿ3      ­  ÿÿÿÿœ  lø ú 4      Å  ÿÿÿÿPø ÿÿÿÿˆø 5      .  ÿÿÿÿPø ÿÿÿÿ¤ø 6      §  ÿÿÿÿPø ÿÿÿÿÿÿÿÿ7      ô  ÿÿÿÿÜˆ  Üø ÿÿÿÿ8      •   ÿÿÿÿÀø øø ÿÿÿÿ9        ÿÿÿÿÜø ÿÿÿÿù :         ÿÿÿÿÜø 0ù ÿÿÿÿ;      S  ÿÿÿÿù ÿÿÿÿÿÿÿÿ<      3  ÿÿÿÿX   hù œú =      o  ÿÿÿÿLù ÿÿÿÿ„ù >      Ú  ÿÿÿÿLù ÿÿÿÿ ù ?      ı  ÿÿÿÿLù ÿÿÿÿ¼ù @      r  ÿÿÿÿLù Øù ÿÿÿÿA        ÿÿÿÿ¼ù ôù ÿÿÿÿB      ×  ÿÿÿÿØù ÿÿÿÿÿÿÿÿC      ×  ÿÿÿÿœ  ,ú `û D      Ú  ÿÿÿÿú ÿÿÿÿHú E      ı  ÿÿÿÿú ÿÿÿÿdú F      Å  ÿÿÿÿú ÿÿÿÿ€ú G      B  ÿÿÿÿú ÿÿÿÿÿÿÿÿH      ¦  ÿÿÿÿX   ¸ú ìû I      o  ÿÿÿÿœú ÿÿÿÿÔú J      Ú  ÿÿÿÿœú ÿÿÿÿğú K      ı  ÿÿÿÿœú ÿÿÿÿû L      r  ÿÿÿÿœú (û ÿÿÿÿM        ÿÿÿÿû Dû ÿÿÿÿN      ×  ÿÿÿÿ(û ÿÿÿÿÿÿÿÿO      ”  ÿÿÿÿœ  |û °ü P      Ú  ÿÿÿÿ`û ÿÿÿÿ˜û Q      ı  ÿÿÿÿ`û ÿÿÿÿ´û R      Å  ÿÿÿÿ`û ÿÿÿÿĞû S      B  ÿÿÿÿ`û ÿÿÿÿÿÿÿÿT      ¥  ÿÿÿÿX   ü <ı U      o  ÿÿÿÿìû ÿÿÿÿ$ü V      Ú  ÿÿÿÿìû ÿÿÿÿ@ü W      ı  ÿÿÿÿìû ÿÿÿÿ\ü X      r  ÿÿÿÿìû xü ÿÿÿÿY        ÿÿÿÿ\ü ”ü ÿÿÿÿZ      ×  ÿÿÿÿxü ÿÿÿÿÿÿÿÿ[      ‘  ÿÿÿÿœ  Ìü  ş \      Ú  ÿÿÿÿ°ü ÿÿÿÿèü ]      ı  ÿÿÿÿ°ü ÿÿÿÿı ^      Å  ÿÿÿÿ°ü ÿÿÿÿ ı _      B  ÿÿÿÿ°ü ÿÿÿÿÿÿÿÿ`      q  ÿÿÿÿX   Xı Œş a      Ú  ÿÿÿÿ<ı ÿÿÿÿtı b      ı  ÿÿÿÿ<ı ÿÿÿÿı c      r  ÿÿÿÿ<ı ¬ı äı d        ÿÿÿÿı Èı ÿÿÿÿe      ×  ÿÿÿÿ¬ı ÿÿÿÿÿÿÿÿf      o  ÿÿÿÿ<ı ÿÿÿÿÿÿÿÿg      ß  ÿÿÿÿœ  ş  h      Ú  ÿÿÿÿ ş ÿÿÿÿ8ş i      ı  ÿÿÿÿ ş ÿÿÿÿTş j      Å  ÿÿÿÿ ş ÿÿÿÿpş k      ‡  ÿÿÿÿ ş ÿÿÿÿÿÿÿÿl      ‘  ÿÿÿÿX   ¨ş T  m      x  ÿÿÿÿŒş Äş Àÿ n        ÿÿÿÿ¨ş àş üş o      ÿ  ÿÿÿÿÄş ÿÿÿÿÿÿÿÿp      0  ÿÿÿÿ¨ş ÿ 4ÿ q      ÿ  ÿÿÿÿüş ÿÿÿÿÿÿÿÿr      2  ÿÿÿÿ¨ş Pÿ ÿÿÿÿs      ÿ  ÿÿÿÿ4ÿ ÿÿÿÿlÿ t      ò  ÿÿÿÿ4ÿ ˆÿ ÿÿÿÿu        ÿÿÿÿlÿ ÿÿÿÿ¤ÿ v      4  ÿÿÿÿlÿ ÿÿÿÿÿÿÿÿw        ÿÿÿÿŒş Üÿ   x      úÀué† j j‹ŞFö^ò‹ûŒFş&ŠPÿ6üÿ6úè-îƒÄ
+Àt/‰vô‰~ü‹÷j jFFş&ŠPÿ6üÿ6úèîƒÄ
+Àuá‰vü‹ş‹vôÄ^&ƒ? uFş&€= uƒ~úu¸ ë¸ ‰FøéCÇFø éBj h Fö&ŠPÿ6üÿ6úè°íƒÄ
+Àté† 9°"t	Fö&€<€swFö&Š˜Phšn¯4ƒÄĞt	ÇFø FéğFö&Š˜Ph$šnÏ4ƒÄĞtÇFø ëİFö&Š˜Ph,šnç4ƒÄĞu¿Fö&Š˜Ph0šnY0ƒÄĞuéëÃ‹Fö‹Ğ‹şÀ¹ÿÿ3Àò®÷ÑI‰Nş90u&9°"t h–"QRVè0íƒÄ
+‰FúÀtÇFø ‰vôéç‹~şƒ>0 u$ƒ>°" th¢"WÿvöVèıìƒÄ
+‰FúÀtÇFø ëËƒ>0 uhWÿvöVèÙìƒÄ
+‰FúÀu©ƒ>0 uhWÿvöVè¼ìƒÄ
+‰FúÀu¿h"WÿvöVè¦ìƒÄ
+‰FúÀté]h%WÿvöVèìƒÄ
+‰FúÀt6j h Fö&ŠDPÿ6üÿ6úè.ìƒÄ
+Àu9°"uéFö&€|€séh'WÿvöVèAìƒÄ
+‰FúÀtéAÿh*WÿvöVè(ìƒÄ
+‰FúÀt6j h Fö&ŠDPÿ6üÿ6úèÉëƒÄ
+Àu9°"uéÿFö&€|€séõşƒ>°" uéÿ6x"ÿ6v"WÿvöVèÎëƒÄ
+‰FúÀtÇFø ëBÿ6|"ÿ6z"WÿvöVè¬ëƒÄ
+‰FúÀtÇFø ë ÿ6€"ÿ6~"WÿvöVèŠëƒÄ
+‰FúÀt
+ÇFø	 ğé´ÿ6„"ÿ6‚"WÿvöVèfëƒÄ
+‰FúÀtÇFø
+ ëEÿ6ˆ"ÿ6†"WÿvöVèDëƒÄ
+‰FúÀtÇFø ë#ÿ6Œ"ÿ6Š"WÿvöVè"ëƒÄ
+‰FúÀuéSÇFø j jğFö&ŠPÿ6üÿ6úè»êƒÄ
+Àtj jFFö&ŠPÿ6üÿ6úèœêƒÄ
+ÀuáÿvöVFòPè«ú‰FúÀuéù ‰vôj j‹ŞFö^ò‹ûŒFş‰^ü&ŠPÿ6üÿ6úèXêƒÄ
+ÀtK‰~ü‹÷j jFFş&ŠPÿ6üÿ6úè4êƒÄ
+ÀuáÄ^&ƒ? uFş&€< u‰vôŒFö‹FúF&‰‹vôé€ ‹vüëÔ‰vôÇFø ‹Æ‹VöFú‹ø‰Vşƒ>°" tVj jÂ&ŠPÿ6üÿ6úèÎéƒÄ
+Àtj jGFş&ŠPÿ6üÿ6úè¯éƒÄ
+ÀuáÄ^&ƒ? u	Fş&€= tÇFø ëƒ‹Fş‹÷‰FöÄ^‹Fö&‰7&‰G‹Fø^_ÉÂ È2  WV‹vÄ^&‹&‹W‰Fò‰VôFÎ‰FöŒVøF
+&Ç &ÇD  j jÄ^ò&ŠPÿ6üÿ6úè)éƒÄ
+Àt!j jÿFòÄ^ò&ŠPÿ6üÿ6úèéƒÄ
+ÀußÄ^ò&€? uF
+&Ç  é±ƒ>°" ué ÿ6üÿ6úèqRÀtFòPFüPèºòHuéˆHué”ÿ6üÿ6úèSÀuÿ6üÿ6úè²RÀtFòPFüPèkõHuéMHuéYÿvôÿvòFúPè‘ø‹øøué„ j jÄ^ò^ú‰^îŒFğ&ŠPÿ6üÿ6úèFèƒÄ
+Àt$‰~şj jÿFîÄ^î&ŠPÿ6üÿ6úè"èƒÄ
+ÀußÄ^&ƒ? u0Ä^î&€? t'‹F‹V Ä^&9Gu&9W
+u‹Fî‹Vğ‰Fò‰Vô&‰?j h Ä^ò&ŠPÿ6üÿ6úèÊçƒÄ
+Àté½9°"tÄ^ò&€?€ré«PjÄ^ò&ŠPÿ6üÿ6úè˜çƒÄ
+ÀuéRj jÄ^ò&ŠPÿ6üÿ6úèwçƒÄ
+ÀtnFí9Fös^Ä^ò&ŠÄ^öÿFö&ˆj jÿFòÄ^ò&ŠPÿ6üÿ6úè?çƒÄ
+ÀuÈë4F
+&Ç ‹Fü&‰Déèƒ~üÿuéßF
+&Ç	 &ÇD ëİ3À^_ÉÂ Ä^ö&Æ ‹Fò‹Vô‰Fî‰VğFîPÿvÿvèå÷H= véœÀ“.ÿ§F;^;j;v;Š;–; ;ª;º;Ê;Ú;ê;ú;Ä^&Ç éŸ Ä^&Ç é“ Ä^&ÇG &Ç é ¸ Ä^&‰GëéÄ^&Ç ëhÄ^&Ç ë^Ä^&Ç	 &ÇG ëNÄ^&Ç	 &ÇG ë>Ä^&Ç	 &ÇG ë.Ä^&Ç
+ &ÇG ëÄ^&Ç
+ &ÇG ëÄ^&Ç
+ &ÇG ‹Fî‹Vğ‰Fò‰Vôÿ6üÿ6úFÎP‹F‹V
+ RPè.é§&ŠGˆFş
+Àuéä ÿ6üÿ6úècOÀt€~ÿ€r	€~ÿ wé‡ €~ÿàr€~ÿÿv{ÿ6üÿ6úèuOÀt€~ÿ€v€~ÿÿs€~ş@v€~şÿrRÿ6üÿ6úèŠOÀt€~ÿ€v€~ÿÿs€~ş?v€~şÿr)ÿ6üÿ6úèŸOÀtU€~ÿ vO€~ÿÿsI€~ş vC€~şÿs=Fì9FöréşƒFòŠFÿÄ^ö&ˆŠFşÿFö‹^ö&ˆG‰FöÄ^ò&ŠˆFÿƒ>°" téÿj hŠFÿPÿ6üÿ6úèÛäƒÄ
+ÀtFí9Föré¿ıÿFòŠFÿÄ^öÿFö&ˆëµÄ^ö&Æ Ä^ò&€?.uÿFòFÎP+Fö÷ØPèå‹øøtS‹Fò‹Vô‰Fî‰VğFîPÿvÿvèyõHt
+Ht- të,Ä^&Ç ëÄ^&Ç ëÄ^&Ç ‹Fî‹Vğ‰Fò‰Vô&‰Ä^&ƒ?t‹Fò‹VôÄ^&‰&‰W¸ ^_ÉÂ ¸sÈF  WVØ‹~ÇFæ ÇFè€‹FÇu
+¸ º€é÷ÿvÿv‹F% €Pj è¢æ‰VşĞt‹Vşâ€Ò}‹VşéÌƒ>°" t5ÿvÿvÿvWFöPèá>‰VşĞt‹Vşâ€Ò|Í‹Fö‹Vø‰Fò‰Vôë‹F‰~ö‰Fø‰~ò‰Fô¸ÿÿ‰Fâ‰Fà‰FŞ‰FÜ‰FÚ‰FØ3ö‰vü‰vú‰vÖ‰vÊ‰vğ‰vì‰vê‰vîƒ~ü u	FÌ‰FÒŒVÔƒ~ü|éFòPFêPFÊPè²ùÀué	‹FêH=	 véÜ À“.ÿ§?Ö?$?Ö?Ö?Ö?.?.?.?8?8?‹Fî‰FÊé© ‹Fì‰FÖé¬ ‹FğH= véŸ À“.ÿ§L?X?p?ˆ? ?²?Ä?öté¥ƒ~Øÿtéœ‹Fì‰FØësötéƒ~Úÿté„‹Fì‰FÚë[ötéuƒ~Üÿtél‹Fì‰FÜëCƒ~Şÿté[‹Fì‰FŞë2ƒ~àÿtéI‹Fì‰Fàë ƒ~âÿté7‹Fì‰Fâë‹FìÄ^ÒƒFÒ&‰‹Fü= véÀ“.ÿ§ö?$@ Ad@ Ad@ A Az@ A A AÊ@ö@Bş@AAAÓ@2AHA\AzAƒ~ê tés‹^úöuÛuéÉöuÇFÚ ÇFÜ ÇFØkÛtéq3À‰FŞ‰Fà‰Fâén‹FêHHt- té-ÇFş¬Bë‹FêHHt- téÇFş EötéoFÊPFØPÿVşÀué[¾ ‹Fî‰FÊFÌ‰FÒŒVÔ‹Ø‹Nì6‰ƒFÒéÖ ƒ~ê	uéÍ FÊPFØPèÀué¾ é³ ÇFü  éÔıÇFú é¢ ÇFş¬BëÇFşDëÇFş EëÇFşöEötéâ FÊPFØPÿVşë¯ƒ~Ê uéÉ ‹FÌ‰FŞ3À‰Fàë#‹FÌ‰FŞ‹FÎ‰FàÇFâ  ë‹FÌ‰FŞ‹FÎ‰Fà‹FĞ‰Fâƒ~ú té ëFÊPFØPè#ÀtyFØPÿvÊèÖÇFú ÇFÊ  ƒ~ü|éEÿ‹^ê‹~ü‹ÇÁçøÿøŠ4˜‰FüéıFØPÿvÊè›FØPFºPjÿvÿv
+èZÙĞuvÂŒĞØÄ~¥¥¥¥+À‰Fè‰Fæƒ>°" tÿvøÿvöè\!‹Fæ‹Vè^_ÉÊ U‹ìV‹NÉ3À^ÉÂ ƒùôu‹^Û~ƒû‹óóƒ¼& tÛƒ~u*ƒùtĞƒùu ‹^öÃuÃ‹Ã¹d ™÷ùÒu‹Ã¹™÷ùÒu«¸ ^ÉÂ U‹ì‹^‹F
+F&‰‹F&‰G‹F&‰GÉËÈ  Ä^&‹G‰Fş&‹G‰FüèŞ‰Fú¡ÀtHuéŠ HuéÖ é6ƒ~ş ~ ƒ~şÿvúÿvşÿvüè,ÿÀt
+ÿvüÿvşéî ƒ~ü ~ƒ~üÿvúÿvüÿvşèÿÀtéÈ ƒ~ş ~ƒ~ş~vƒ~ü éÛ ƒ~ü~éÒ jÿvüÿvşÿvÿvè7ÿƒÄ
+¸ ÉÂ ƒ~ü ~ƒ~üÿvúÿvüÿvşè¬şÀuqƒ~ş ~ƒ~şÿvúÿvşÿvüèşÀtéaÿƒ~ş ~ƒ~şŠjÿvşÿvüëšƒ~ş ~ƒ~şÿvúÿvşÿvüèZşÀté+ÿƒ~ü ~#ƒ~üÿvúÿvüÿvşè;şÀtÿvşÿvüÿvúéRÿƒ~ü ~	ƒ~üé:ÿƒ~ş ~ƒ~ş~’3ÀÉÂ È  Ä^&‹G‰Fü&‹G‰Fş&‹G‰Fúè•Ü¡ÀtHué’ Huéæ ¸ ÉÂ ƒ~ü ~ƒ~üÿvúÿvüÿvşè´ıÀtéú ƒ~ş ~!ƒ~şÿvüÿvşÿvúè•ıÀtÿvúÿvşÿvüë.ƒ~ş éò ƒ~ş~éé ÿvúÿvşÿvüèhıÀuéÖ ÿvüÿvşÿvúÿvÿvè¶ıƒÄ
+étÿƒ~ş ~ƒ~şÿvúÿvşÿvüè0ıÀuËƒ~ş ~ƒ~şÿvüÿvşÿvúèıÀté|ÿƒ~ü ~|ƒ~üvÿvúÿvüÿvşèõüÀtfë<ƒ~ş ~ƒ~şÿvüÿvşÿvúèÖüÀté>ÿƒ~ü ~ƒ~üÿvúÿvüÿvşè·üÀt	ÿvşÿvüéOÿƒ~ş ~ƒ~şÿvúÿvşÿvüè’üÀté*ÿ3ÀÉÂ È  WV‹vF
+&‹|èÛ‰FşPWF
+&ÿtè`üÀtF
+&ÿtWÿvşëjWF
+&ÿtÿvÿvè¢üƒÄ
+¸ ^_ÉÂ È  Ä^&‹G‰Fş&‹G‰Fü¡ÀtHtHtëKÿvü&ÿwÿvşèıûÀtë!ÿvş&ÿwÿvüèéûÀtÿvüÄ^&ÿwÿvşëÿvşÄ^&ÿwÿvüÿvÿvè'ü¸ ÉÂ U‹ì‹FHtHtÉÂ ‹^F&ƒu&ÇG  ÉÂ ‹^F&ƒ}&ƒGÉÂ U‹ì‹^‹N
+GÁ&9Gu&9O
+t3ÀÉÂ ‹^F&ƒÿu&ÇG  &ƒÿu&ÇG  &ƒ
+ÿu&ÇG
+  ¸ ÉÂ È  WV‹^‹N
+GÁ&9Gw]‹vF&‹<ƒÿÿu&9|t&9|tèÙ‹øF&ƒ|ÿuƒÿÿt&ƒ|ÿt&ÇD &‰<‹Ç@t&ƒ|ÿt&ƒ|ÿt
+¸ ^_ÉÂ 3À^_ÉÂ È4  WVÿvÿvFìPjj j è¬ÓĞt
+¸ÿÿ^_ÉÂ h"FÜPjj j èŠÓĞuŞ^ä›6İ›İFô›ØÑ›İØ›İØ›ßàrÄÇFü  ÇFş("ÿvşFÌPjj j èNÓĞu¢^ä›6İ›İFô›ØÑ›İØ›İØ›ßàr›İFÔ›İFô›ØÑ›İØ›İØ›ßàr!~ävÔŒĞÀØ¥¥¥¥ƒFşÿFüƒ~ü|˜ë
+‹Fü^_ÉÂ ¸ ^_ÉÂ È  WVÇFô  Ä^&‹&‹W‹ø‰VøÄ^&€? uéô‰Fö‹ó&Š˜=y uéùw<Mué
+",'t:,uéW,tkF
+&ŠÄ^öF&ˆÿFöëG,duéé şÈué2,tF,uéÍ ëÒF&€< t#‹~ö&ŠˆFÿF<'tFø‹ßG&ˆF
+&€< uã‰~öF
+&€< téuÿ‹~öé^‰vÿFÿ6üÿ6úè…BÀtZ3öÄ^&€?gt&€?Gu&€gt&€?Gt¾ ë¾ vÿvÿvèş‰FüÀ}(Ä^&ÿ7ÿvøÿvöèØÄ~ö¹ÿÿ3Àò®÷ÑINö‹véwÿ‰vşÁækØ‹¸"‹ˆ"ÁéœÄ^&‹ëÄ^&‹ÇFô F
+&Š&8Dté³&ŠD&8DtéŒOèŒá‰Fü‰VşĞt‹Vşâ€Ò}éxF
+&ŠD&8Dté&€<duéİ &€<DuéÔ >úuƒ>ü t>úuƒ>ü t‹ÇÁà2é¸ ‰vƒ~ô uT‹ŞF
+ƒÃŒFş&€? tC‰^ü‰~ú‹ó&€<dt0&€<Dt*&€<'uF&€<'t&€< t	F&€<'uóëNF&€< uĞ‹~úëÇFô ƒ~ô t7>úuƒ>ü u‹ßÁã‹‡Œ‹—‰Fü‰Vş‹vë3‹ßÁã‹‡‹—ëæÁçÇ2‰~üŒ^şëÜÄ^&‹GÁà¾ ‰FüŒ^şƒÆ‰vë:‰v‹Ş&€?dt&€?DtÁçÇ²‰~üëÄ^&‹GÁà!‰FüŒ^ş‹Æ ‰FÄ~üÅvö¹ÿÿ3Àò®÷Ñ+ù‡şÑéó¥Éó¤éş‹Æ ‰Fƒÿ
+}Ä^öÿFö&Æ0ë
+‰v‹Æ@‰FWéãı&€|yumÄ^&‹‰FúF
+&€|yu&€|yuƒÆë,D‹ğ‹Fú¹d ™÷ù= u	‹Fú™÷ù‰Vúƒ~ú
+}
+Ä^öÿFö&Æ0ÿvúÿvøÿvöè˜ÕÄ~ö¹ÿÿ3Àò®÷ÑINöéıFÿ6üÿ6úè¢?ÀuéñüÇFü  F
+&€<et&€<EuÇFü Fÿvÿvè@û‹øø}éÅüÄ^&‹kß+‡"@‰Fş=
+ }ƒ~ü t
+Ä^öÿFö&Æ0Pévÿ‹Vş^_ÉÂ Fø&Æ ŒÀÄ^&‰?&‰G3À™^_ÉÂ È  WVƒ>. tÄ^&ƒ|»ë»‹óëƒ>0 tm¸‹ğŒ^şFş&€< t\‹~
+‹NÉuF&‹&‹U&ÿ‹ØÂ&Æ Fş&€< t‹F&ŠF&Ä&ˆF&ÿFşF&€< uäÉtF&‹&ÿ&E&Æ ^_ÉÂ
+ È  WVÄ^&‹&‹W‰Fø‰Vúƒ>°" tƒ>®" tFøPÿv
+ÿvjè.ÿÄ^&‹G‰Fòƒ>. t= ~ƒnòëƒ~ò uÇFò Ä^&‹G‰Fô&‹G
+‰Fö3ÉFò‰Fü‰Nş‹ñ‹^ü6‹‰Fğ=
+ }öƒ>, t
+Ä^øÿFø&Æ0ÿvğÿvúÿvøèªÓÄ~ø¹ÿÿ3Àò®÷ÑINøƒş} $‹^øÿFø&ˆƒFüFƒş|¤ƒ>°" tƒ>®" u‹vFøPÿv
+Vj ènşÄ^ø&Æ ‹ÃŒÂÄ^&‰&‰W3À™^_ÉÂ ¸ı=È¦  WVØÿvÿvÿvÿv
+è{Ö‰VşĞt‹Vşâ€Ò}‹Vşéß ÇFÚ ~âvŒĞÀØ¥¥¥¥FêPFÚPè Ï‰Fü‰VşĞt‹Vşâ€Ò|¾†Zÿ‰FøŒVúƒ~ìuƒ~îu~êku¾ ë3ööu&FêPh~ FøPèqù‰VşĞt‹Vşâ€Ò}éoÿöu9vğu
+9vòu9vôt0öu
+Ä^øÿFø&Æ FêPFøPèş‰VşĞt‹Vşâ€Ò}é,ÿ†ZÿPÿvÿvšD^_ÉÊ È  WV‹v
+j jF&ŠPÿvÿvèšÒƒÄ
+Àtj jFF&ŠPÿvÿvè}ÒƒÄ
+ÀuãF&ŠˆFÿ<-t<+uF3ÿ&€<0|!&€<9&Š˜‹ÏÁáÏÉÁ-0 ‹øF&€<0}ßj j&ŠPÿvÿvè)ÒƒÄ
+Àtj jFF&ŠPÿvÿvèÒƒÄ
+ÀuãF&€< t¸ º €^_ÉÊ €~ÿ-u‹Ç÷ØÄ^&‰ëÄ^&‰?3À™^_ÉÊ ' @F  @v:kŞ:@   AU‹ì‹F
+.÷.HPÄ^&‰&‰W’™&‰W&‰W3À3ÒÉÊ U‹ì‹F
+.÷&HPÄ^&‰‹Ê‹F.÷&HPÁƒÒ &‰G3À€~ yê'H&‰W&‰G3À3ÒÉÊ U‹ìƒÄş›Ù~ş›.Ù.\PÄ^
+›&Ù›.ØJPÄ^›&ß?›ßà›Ûâ¨›Ùnşu3À3ÒÉÊ ¸
+ º€ÉÊ U‹ìƒÄş›Ù~ş›.Ù.\PÄ^
+›&İ›.ØJPÄ^›&ß?›ßà›Ûâ¨›Ùnşu3À3ÒÉÊ ¸
+ º€ÉÊ U‹ìƒÄş›Ù~ş›.Ù.\P›ßn
+›.Ø6JPÄ^›Ùü›&ß›ßà›Ûâ¨›Ùnşu3À3ÒÉÊ ¸
+ º€ÉÊ U‹ìƒÄş›Ù~ş›.Ù.\P›ßn
+›.Ø6JPÄ^›Ùü›&Û›ßà›Ûâ¨›Ùnşu3À3ÒÉÊ ¸
+ º€ÉÊ U‹ìƒÄş›Ù~ş›.Ù.\P›ßn
+›.Ø6JPÄ^›&Ù›Ûâ›Ùnş3À3ÒÉÊ U‹ìƒÄş›Ù~ş›.Ù.\P›ßn
+›.Ø6JPÄ^›&İ›Ûâ›Ùnş3À3ÒÉÊ U‹ìƒÄş›Ù~ş›.Ù.\P›ßn›ÛF
+›ŞÉÄ^›&ß?›ßà›Ûâ¨›Ùnşu3À3ÒÉÊ ¸
+ º€ÉÊ U‹ìƒÄü‹^›6ß/6‹G‹^=à}= ò~
+›6ß7›ÉÂ ›Ù~ş›.Ù.^P›.Û.NP›ÙÁ›Øñ›Ùü›ßVü›ŞÉ›Şé›6ß7‹Fü™3Â+Â›Ûâ›Ùnş€â€
+Â6G	ÉÂ U‹ìƒÄô›Ù~ş›.Ù.\P›İF›ÙÀ›Û~ô‹Fü€ä-8@ºM÷êƒÀÿƒÒ ‹Âèt ‹^›6ß7›Ûâ›ÙnşÉÊ
+ U‹ìƒÄü›Ù~ş›.Ù.\P‹N›ÙîÉt!Ä^
+2ä›.ØXP&Š‰FüC›ŞFüIuì‹V÷Úè' ‹^›&İ›ßà›Ûâ¨›Ùnşu3À3ÒÉÊ ¸
+ º€ÉÊ Òt'V¾ïTy¾¹S÷Ú‹ÚƒãtKkÛ
+›.Û(›ŞÉÆ– Áêuå^Ã        @       È@       ú@      @œ@      PÃ@      $ô@     €–˜@      ¼¾@     (kî@     ù• @    @·Cº#@    ¥Ôè&@    *ç„‘*@   €ô æµ-@    1©_ã0@   ¿É4@µp+¨­Åi@×•C)¯@Õ¦ÏÿIxÂÓ@ü÷Ú‡zç×A£›Å«³ï=A2#™À­…sAàŒé€ÉGº“¨Aç¦Ó¨Å¹¤İAªæ+¡¶B“¿›…‘¢(ÊGBkU'9÷pà|BFa‚75.ù±B0É<ãÿ–RŠçBf¿Öó¦‘™CŞùûë~ªQCÍÌÌÌÌÌÌÌû?
+×£p=
+×£ø?;ßO—nƒõ?,eâX·Ññ?#„GG¬Å§î?¶il¯½7†ë?¼BzåÕ”¿Öç?ıÎa„wÌ«ä?—¥´6A_p‰á?¿Õí½ÎşæÛİ?ÿª$Ëÿë¯Ú?ÌˆPo	Ì¼Œ×?´KB.áÓ?Ø\	5Ü$´Ğ?Ù¬°:÷|Í?[áMÄ¾”•æÉ?º”9E­±Ï”?YÁ~±S|»_?¥é9¥'ê¨*?¦	kº`Å—õ>›Suı÷´ˆÀ>}Óeğ¼5CöŠ>¡ä¼d|FĞİU>É‚S|nºÊÇ >“ sÛ“àô³ë=0 Ë8Û'¢¶=Ì#Twƒÿ‘=`¼¤=©Ş€ƒL=¾N1Jì<åì=×á2ÏÍ_`Õá<:zc%C1À¬< ¸ENU‹ìØÿvÿvÿvÿv
+j h ÿvÿvè ÉÊ ¸'VÈ8  WVØ‹vÄ^&‹‰Fşƒşr7VšR4‰VüĞt‹Vüâ€Ò}‹Vüé×‹~÷Ç àtÿ t	¸ º€é¾+À‰Fö‰Fô‰FÔ‹F‹V ‹ø‰VúŠF% ‹vşkÆF=CvéÀ“.ÿ§ÜVdYdY([Ta0[@[R[@[d[ÜYÜY([ÜYÜYÜYÜYÜY([ÜYdYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYdYdYt[~[ˆ[˜[¦[º[Ü[ÜYÜYú[ÜYÜYÜYÜYÜY\dYdY\jY4\>\H\`\j\ÜYÜYŒ\ÜYÜYÜYÜYÜY \dYdY¸\Ğ\jYè\ò\
+]]ÜYÜY6]ÜYÜYÜYÜYÜYF]dYdY^]~]]û]¾]Ş]^ÜYÜY@^ÜYÜYÜYÜYÜY^^dYdY~^¦^È^ê^û]_._ÜYÜYZ_ÜYÜYÜYÜYÜY|_dYdY^]~]]û]¾]û]_ÜYÜY@^ÜYÜYÜYÜYÜY^^dYdYÈ_ê_`.`P`r`”`ÜYÜY¬`ÜYÜYÜYÜYÜYÎ`dYdYFZFZFZFZFZFZFZú`FZFZÜY$aÜYÜYÜYFZÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYjYÜYÜYÜYÜYÜYÜYÜYdYdYt[~[ˆ[˜[¦[º[Ü[ÜYÜYt[ÜYÜYÜYÜYÜY`aÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYdYdYÜYÜYÜYÜYÜYÜYÜYtaÜYÜYÜYú`ÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYÜYdYdYa¢a¶aÊaŞaòabÜYÜY.bÜYÜYÜYÜYÜYt[‹vôë‹vôFú&‹&‹U‰Fì‰Vî‰vô‹FöÀ}é®‹v‹F‰FäF&ƒ<séŸVš<
+ÈY‹ø‰VöĞuéŒ‹Vöâ€Ò|é~FäPš<
+qVFÔPš<
+èY‹Ç‹Vöé†ƒşséæ VšR¤Y‰Fô‰VöĞt‹Vöâ€Ò}é6÷Æ @ué¿ Fú&‹&‹U‹ø‰Vúæÿ¿ƒşté üÂ‹ØƒÇ&‹7ş@téü¸ º €‹ø‰Vöë„Fú&‹&‹U‹ğ‰VşŠF$té‘‹ÂÆuéˆRVÂ&Ä‰^ĞŒFÒ&ÿ_ƒÄÿvşVÿvÿv
+FÔPèÜ‹ø‰VöÿvşVÄ^Ğ&ÿ_ƒÄ‹FöÇtéE‹vÔƒş	ué:‰~ôFÜ‹ÈŒVú‰Fø‹øéıû‰~øş uƒ~uÄ^ø&ÿw&ÿ7FìPèå/ë!ƒşu#~ uÄ^ø&ÿw&ÿ7FìPè&/‹ğ‰Vöéeş¸ º€‰Vö‰Fôé=şÇFì  é4ş¡²‹´‰Fì‰Vîé$ş~ì¾¶ŒĞÀ¥¥¥¥éş+À‰Fî‰Fì‰Fò‰FğéşhJFìPšDTOëªFú&‹éÜFú&‹™ë°Fú›&ß›Ù^ì›éÌıFú›&ß›İ^ìëîFú&ÿ5FìPè€éWÿFú›&ß›İ^ì›ÿvòÿvğÿvîÿvìèºé5ÿFú&ÿ5ÿvÿv
+j j FìPè®"éÿFú&ƒ=õÀéRFú&ÿ5FìPè²éõşFú&ÿu&ÿ5FìPè¢éİşFú›&ÛéQÿFú›&ÛéWÿFú&ÿu&ÿ5FìPèöé±şFú›&ÛéWÿFú&ÿu&ÿ5ÿvÿv
+j j FìPè¢"é…şFú&‹E&té½3Àé¹Fú&ÿu&ÿ5FìPèFéYşFú&ÿu&ÿ5FìPèJéAşFú&ÿu&ÿ5FìPè&é)şFú›&Ùé­şFú&ÿu&ÿ5FìPèléşFú›&Ùé­şFú&ÿu&ÿ5ÿvÿv
+j j FìPèV%éÛıFú›&Ù›Ø²éFú&ÿu&ÿ5FìPèÔé³ıFú&ÿu&ÿu&ÿu&ÿ5FìPèÄé“ıFú&ÿu&ÿu&ÿu&ÿ5FìPè˜ésıFú&ÿu&ÿu&ÿu&ÿ5FìPètéSıFú&ÿu&ÿu&ÿu&ÿ5FìPè¶é3ıFú&ÿu&ÿu&ÿu&ÿ5è‰Fô‰Vö‰~ø‹Ç‹Vú~ì‹ğÚ¥¥¥¥éOûFú&ÿu&ÿu&ÿu&ÿ5ÿvÿv
+j j FìPèò$éÑüFú›&İ›Ü¶›İØ›ßàuéCş¸ÿÿéûFú&ÿu&ÿu&ÿu&ÿ5FìPèÜ
+é“ü‰~øÄ^ø&ÿw&ÿw&ÿw&ÿ7FìPèó‰Fô‰Vöé¾ú‰~øÄ^ø&ÿw&ÿw&ÿw&ÿ7FìPèÃëÖ‰~øÄ^ø&ÿw&ÿw&ÿw&ÿ7FìPè™ë´‰~øÄ^ø&ÿw&ÿw&ÿw&ÿ7FìPèıë’‰~øÄ^ø&ÿw&ÿw&ÿw&ÿ7FìPèéoÿ‰~øÄ^ø&ÿw&ÿw&ÿw&ÿ7ÿvÿv
+j j FìPèy$éCÿ‰~øÄ^ø&ÿw&ÿw&ÿw&ÿ7FìPèIé!ÿ‰~øÄ^ø&ÿw&ÿw&ÿw&ÿ7FìPè
+éÿşFú&ÿu&ÿu&ÿu&ÿ5ÿvÿv
+j j FìPè€îéIûFú&ÿu&ÿ5ÿvÿv
+j j FìPèé'ûFú&ÿu&ÿ5ÿvÿv
+j j FìPèÊéûFú&ÿu&ÿ5ÿvÿv
+j j FìPè éãúFú&ÿu&ÿ5ÿvÿv
+j j FìPèéÁúFú&ÿu&ÿ5ÿvÿv
+j j FìPè€éŸúFú&ÿu&ÿ5ÿvÿv
+j j FìPèlİé}úFú&ÿu&ÿ5FìPšp[éeúFú&ÿu&ÿ5ÿvÿv
+j j FìPè&éCúFú&ÿu&ÿ5ÿvÿv
+j j FìPèH	é!ú¸ º€éFù‹vôFú&‹E&uéaø&ÿu&ÿ5&Ä&Ä&ÿ_ƒÄéJøFú&‹E&t$FìPh†ahÔFú&ÿu&ÿ5&Ä&Ä&ÿƒÄé¼ù+À‰Fî‰FìéøFú&ÿ5FìPèªéùFú&‹E&tÔFìPh]bhë®Fú&ŠPFìPè	énùFú&ŠPFìPèûéZùFú&ŠPFìPèİéFùFú&ŠPFìPèƒé2ùFú&ŠPFìPè'éùFú&Š*ä+Ò‰VÎ‰VÌ‰VÊ‰FÈ›ßnÈé²ùFú&ŠPÿvÿv
+j j FìPèOéâøFú&€=éÉù‹~ôéŒ÷väŒĞØÄ~¹ ó¥ƒ~Ôr
+FÔPš<
+ÒY3À™^_ÉÊ È  V‹v+À‰Fö‰Fô‰Fü‰Fş‰Fú‰FøPPPPÿvÿvFôPjÿv
+ÿvh6ahäj j ‹FPVÀ&Ä&ÿ_ƒÄ"^ÉÂ È  WVŒĞ9¶tšÄbë¡²‹´‰Vş‹ø‰VúĞu	¸ º €ëFú&‹&‹U‰Fô‰Vö3À™‹È‰Vş‹Â‰VúÁtâ€Ò}‹Á‹Vú^_ÉÊ +À‰Fş‰FüPÿv
+Ä^ôS&Ä&ÿ_ƒÄ‹ğ‰VúĞt‹^üë¸ º €‹Ø‰Vş‹FúÄ~&‰5&‰E‹Ã‹Vş^_ÉÊ È  W‹FFtWŒĞ9¶tšÄÏbë¡²‹´‹ø‰VúĞu¸ º €ëFú&‹&‹U‰Fô‰Vö3À™‹Ø‹ÂÃuÿvÿvÄ^ôS&Ä&ÿ_ƒÄ_ÉÊ È  Vš.d  ¾&¡ä&‹æ9FuZ9VuU&¡à&‹â9Fu9V
+uéÁ~ uƒ~
+ t~ u+ƒ~
+ u%šá$  ‰F‰V
+¾&¡à&‹â9Fu9V
+ué‚ÿv
+ÿv‹F‹VRPFòPj
+še  ‹ğNö¸£dÀ&Æì$¸ &£è&£êëpÿv
+ÿvj h FòPV¸ì¹We‰Fî‰NğQPVšãd  ¾&‰6è&Çê  ‹ÆHu5ÿv
+ÿvj h ÿvğÿvîjFòPjš&  Ä^î&Š8Fòu¾&Çê ÿv
+ÿv‹F‹VRPFşPjšMe  = ¾&Æö.ëŠFş¾&¢öÿv
+ÿv‹F‹VRPFşPjše  = ¸eeÀ&Æ÷ ë¸QVÀŠFş&¢÷& ÷&8öu&Æ÷ ÆFü1ÿv
+ÿv‹F‹VRPFüPjš¯%  €~ü0u2Àë°¾&¢ø‹F‹V
+&£à&‰â‹F‹V&£ä&‰æ3À™^ÉÂ ¸vdU‹ìØ€~
+õÀÄ^&‰3À™ÉÊ ¸İeU‹ìØƒ~
+õÀÄ^&‰3À™ÉÊ ¸ûeU‹ìØ‹FF
+t¸ÿÿë3ÀÄ^&‰3À™ÉÊ ¸fU‹ìØ›ÙF
+›ÜÀ›İØ›ßàt¸ÿÿë3ÀÄ^&‰3À™ÉÊ ¸?fU‹ìØ›İF
+›ÜÀ›İØ›ßàt¸ÿÿë3ÀÄ^&‰3À™ÉÊ ¸ofU‹ìØÿvÿvÿvÿv
+ÿvÿvè±ÿÉÊ ¸ŸfU‹ìØ‹F‹VF
+VĞt¸ÿÿë3ÀÄ^&‰3À™ÉÊ ¸ÃfÈ  WVØ‹F‹V‰Fò‰VôĞu
+¸ º€éo+À‰Fü‰FúÄ~¹ÿÿò®÷ÑI‰NşÉtÜÿvÿvè$Àt>ÿvÿvÿvÿvFòPèù‰VøĞt‹Vøâ€Ò}‹VøéÄ~ò¹ÿÿ3Àò®÷ÑI‰Nş¿€ŒÙÁÅvò¹ÿÿ3Àò®÷Ñ+ùó¦tÀÿÿÀu	ƒ~şué· hˆÿvôÿvòš ÿgƒÄÀu	ƒ~şué˜ ¿ŒÙÁÅvò¹ÿÿ3Àò®÷Ñ+ùó¦tÀÿÿÀuƒ~şth•ÿvôÿvòš ŠcƒÄÀuƒ~şu
+Ä^&ÇÿÿëNÿvôÿvòÿvÿvÿvÿv
+FêPè‰Fú‰VüĞu)^ê›6İ›ÜÀ›İØ›ßàt¸ ë3À= õÀÄ^&‰ÿvÿvèÜ"Àt
+ÿvôÿvòèôú‹Fú‹Vü^_ÉÊ ¸ñfÈ  VØÿvÿvÿvÿv
+jFìPèU!‹ğ‰VşĞu	‹FôÄ^&‰‹Æ‹Vş^ÉÊ ¸hU‹ìVØ‹^
+ûÿ wÄv3À&ˆ3Ò^ÉÊ ¸
+ º€^ÉÊ ¸ËhU‹ìØƒ~ u~
+ÿ wŠF
+Ä^&ˆ3À™ÉÊ ¸
+ º€ÉÊ ¸ûhU‹ìØ›ÙF
+ƒì‹Ü›6İ›ÿvÿvè ÉÊ ¸/iU‹ìØ^
+›6İ›ÜÈ›İØ›ßàr(›6İ›ÜĞ›İØ›ßàsF
+PèZÄ^&ˆ3À™ÉÊ ¸
+ º€ÉÊ ¸WiÈ  VØÿvÿvÿvÿv
+FúPè‡ç‰Fü‰VşĞt‹ğëÿvúÿvÿvèåş‹ğ‰Vş‹Æ‹Vş^ÉÊ ¸©iU‹ìØÿvÿvÿvÿv
+ÿvÿvèAÿÉÊ ¸÷iU‹ìØŠF
+Ä^&ˆ3À™ÉÊ ¸jÈ  Øÿvÿvÿvÿvÿvÿv
+FúPè›‰VşĞuÿvúÿvÿvè]ş‰Vş‹VşÉÊ ¸5jÈ  VØÿvÿvÿvÿv
+jFìPèi‹ğ‰VşĞu	ŠFôÄ^&ˆ‹Æ‹Vş^ÉÊ ¸yjU‹ìØŠF
+*äÄ^&‰3À™ÉÊ ¸·jU‹ìØƒ~ÿ|)~
+ €r ƒ~ |~
+ÿw‹F
+Ä^&‰3À™ÉÊ ¸
+ º€ÉÊ ¸ÓjU‹ìØ›ÙF
+ƒì‹Ü›6İ›ÿvÿvè ÉÊ ¸kU‹ìØ^
+›6İ›ÜØ›İØ›ßàr(›6İ›Üà›İØ›ßàsF
+PèrÄ^&‰3À™ÉÊ ¸
+ º€ÉÊ ¸?kU‹ìØÿvÿvÿvÿv
+ÿvÿvè åÉÊ ¸‘kU‹ìØÿvÿvÿvÿv
+ÿvÿvèiÿÉÊ ¸·kU‹ìØ‹F
+Ä^&‰3À™ÉÊ ¸ÛkÈ  WVØÇFè ÿvÿvÿvÿvÿvÿv
+FèPFğPè… ‰VşĞt‹Vşâ€Ò}‹Vşé,3ÿFğ‹ğŒVú9~ìtéÆ ‹NêNèƒù|u€~ğv	¸
+ º€éı É~Dƒ~è ~ Fú‹ŞF&Š*ä‹×Áâ×ÒÂ‹øÿNèIÉÚ‰Nş‰vø‹ñ‹Nøö~‹ŞÁã‹‡X÷ç‹øëJ‰vø‰Nşëàƒ~è ~<öu8Fú‹Ù&€?w,‹ñF&€?u$ƒ~è~‰~ü‹ŞF&€? uÿNèƒ~èî‹Ç$<uGƒ~î t
+÷ßÿ~UéVÿÿ}MéNÿ‰~ü‰vø‹Fì÷nè‹Øƒû|ƒûté2ÿ€~ğvé)ÿƒ~è ~Fú‹ŞF&Š*äŠNì‹×ÓâÂ‹øÿNèƒ~è äÄ^3À&‰?3Ò^_ÉÊ ¸õkÈ  VØÿvÿvÿvÿv
+jFìPèq‹ğ‰VşĞu	‹FôÄ^&‰‹Æ‹Vş^ÉÊ ¸qmU‹ìØŠF
+*äÄ^&‰3À&‰G™ÉÊ ¸¯mU‹ìØ‹F
+™Ä^&‰&‰W3À™ÉÊ ¸ÏmU‹ìØÿv
+ÿvÿvèÊÿÉÊ ¸ïmU‹ìØ›ÙF
+ƒì‹Ü›6İ›ÿvÿvè ÉÊ ¸nU‹ìØ^
+›6İ›Üè›İØ›ßàr,›6İ›Üğ›İØ›ßàsF
+Pè~Ä^&‰&‰W3À™ÉÊ ¸
+ º€ÉÊ ¸3nU‹ìØÿvÿvÿvÿv
+ÿvÿvèìâÉÊ ¸‰nU‹ìØÿvÿvÿvÿv
+ÿvÿvèeÿÉÊ ¸¯nÈ   WVØÇFğ ÿvÿvÿvÿvÿvÿv
+FğPFäPè§‰VşĞt‹Vşâ€Ò}‹Vşé+À‰Fş‰FüFä‹ğŒVúƒ~ô téı ‹~ò~ğƒÿ
+|u€~äv
+¸
+ º€éIÿ~Gƒ~ğ ~AFú‹ŞF&Š*ä+Ò‹Nü‹^ş‰Fà‰Vâ‹Á‹ÓÉÛÉÛÈÚÉÛNà^â‰Nü‰^şÿNğOÿ¹ÿ~‹ßÁãÿ·Zÿ·XFüPšÒ¶gëEƒ~ğ ~?ÿu;Fú&€<w*‹şF&€=u)ƒ~ğ~‹ŞF&€? uÿNğƒ~ğîŠFü$<uƒFüƒVş ƒ~ö t#‹Fü‹Vş÷ØƒÒ ÷Ú‰Fü‰VşÒ|k~é'ÿÀtbé ÿƒ~ş }Yéÿ‹Fô÷nğ‹Øƒû!|téÿ€~ävéûşƒ~ğ ~4‹Fü‹VşŠNô
+ÉtÀÒşÉuøFú‹ŞF&Š*íÁƒÒ ‰Fü‰VşÿNğƒ~ğ Ì‹Fü‹VşÄ^&‰&‰W3À™^_ÉÊ ¸ÓnÈ  VØÿvÿvÿvÿv
+jFìPè?‹ğ‰VşĞu‹Fô‹VöÄ^&‰&‰W‹Æ‹Vş^ÉÊ È  WVNìQÄ^&ÿw&ÿw&ÿw&ÿ7šJ&qƒÄ~ô‹ğÚ¥¥¥¥^ì›6İš¶o‰Fü‰Vş^ô›6İ›Üø›İØ›ßàwM›İFô›Üø›İØ›ßàuöFüu5›İFô›ÜÈ›İØ›ßàr›İFô›ÜÈ›İØ›ßàuöFütƒnüƒ^ş ë	ƒFüƒVş ‹Fü‹Vş^_ÉÂ ¸£pÈ  ØŠF
+*ä+Ò‰Vş‰Vü‰Vú‰Fø›ßnøÄ^›&Ù›3À™ÉÊ ¸¥qU‹ìØ›ßF
+Ä^›&Ù›3À™ÉÊ ¸×qU‹ìØÿv
+ÿvÿvèÌÿÉÊ ¸õqU‹ìØ›ÛF
+Ä^›&Ù›3À™ÉÊ ¸rU‹ìØ›İF
+›İ ›ØÑ›İØ›ßàs&›İ›ØÑ›İØ›ßàv›ÙÀÄ^›&Ù›İØ3À™ÉÊ ›İØ¸
+ º€ÉÊ ¸/rU‹ìØÿvÿvÿvÿv
+ÿvÿvè8ßÉÊ ¸rU‹ìØÿvÿvÿvÿv
+ÿvÿvèiÿÉÊ ¸§rÈ  Øÿvÿvÿvÿvÿvÿv
+FôPèc‰VşĞuÿvúÿvøÿvöÿvôÿvÿvè"ÿ‰Vş‹VşÉÊ ¸ËrÈ  VØÿvÿvÿvÿv
+jFìPèÉ‹ğ‰VşĞu‹Fô‹VöÄ^&‰&‰W‹Æ‹Vş^ÉÊ ¸sÈ  ØŠF
+*ä+Ò‰Vş‰Vü‰Vú‰Fø›ßnøÄ^›&İ›3À™ÉÊ ¸_sU‹ìØ›ßF
+Ä^›&İ›3À™ÉÊ ¸‘sU‹ìØÿv
+ÿvÿv×<D=Q=a=Ú=>>>‡>í>ú>º?É?à? `  ü   0#01$1a1í1ô1Ã2%3_3?4]4t4Ü7à7ä7è7ì7ğ7ô7ø7ü7 88888(8,8084888l8p8t8x8|8€8„8ˆ8Œ88”8˜8œ8 8¤8¨8¬8!:(:1:::B:T:Y:e:m:u:}:–::§:¯:¸:Ú:;;;8;?;Y;`;w;~;…; ;Ò;ç;î;õ;<B<l<x<‰<<¡<¹<Ù<Q=l=|=Š=›=«=µ=¼=Ë=Ô=å=>>U>b>©>º>á>î>õ>??J?Q?[?_?d?n?r?{??Š? p  °   !0'0.080b0h0s0y0’0™0¡0¶0ë0û01f1…1–12!2C2ç2ş23+3C3”3ê3A4666!6&60676?6E6L6Q6b66‘7±7Ï7d8q8š8±8Ï8k9:ì:;,;A;L;¦;¿;Ô;Ú;ß;å;î;0<K<i<t<“<…>—>°>õ>?<?O?W?}?‹?š?©?ß?ì?   €  ¼   ;0u0ˆ0°0Ó01,1r1y1£1½1â1í12(2`2j2a3­3³3¿3Ñ3Û3á3å3ğ344%4Ñ:à:ì: ;;(;;;G;U;g;m;s;€;‡;•;§;¼;Á;É;Î;×;İ;ê;ö;<<<#<0<;<O<_<j<‡<“<¨<·<Á<Ñ<=(=4=?=F=Q=c=l=t=}=…=‹=’=–=¡=³=Ë=]?Á?Ü?å?ë?   è   x0„0¦0I1›1¡1©1¹1¿1Ö192>2C2H2T2f2l2Q3o344/4ã4ª5Ä5Ì5ö56B6M6^6y6‚6”6Ï6ñ647X7v7Ò7Û7î7ö788R8g88¥8Ù8ì89V9\9j9¹9é9D:J:X:¶:ò:;;Š;²;Ä;û;<<<Z<†<±<º<Í<ô<+=C=o=–=Å=(>@>G>O>T>X>\>…>«>Å>Ì>Ğ>Ô>Ø>Ü>à>ä>è>2?8?<?@?D?ª?µ?Ğ?×?Ü?à?ä?      T   0+0]0d0h0l0p0t0x0|0€0Ê0Ğ0Ô0Ø0Ü011i1~1•1Ş1q2x2Š2—2­2È2â2,3A3t3’3È34=4a4Â4È4 °  L   0000t1|1„1Œ1”1œ1¤1¬1´1¼1Ä1Ì1Ô1Ü1ä1ì1ô1ü1 222,2<2L2È2Ğ2Ğ5Ô5Ø5Ü5   Ğ  `  ğ5 66666666 9¨9¬9°9´9¸9¼9À9Ä9È9Ì9Ğ9Ô9Ø9Ü9à9ä9 ;;;; ;(;0;8;@;H;P;X;`;h;p;x;€;ˆ;;˜; ;¨;°;¸;À;È;Ğ;Ø;à;è;ğ;ø; <<<< <(<0<8<@<H<P<X<`<h<p<x<€<ˆ<<˜< <¨<°<¸<À<È<Ğ<Ø<à<è<ğ<ø< ==== =(=0=8=@=H=P=X=`=h=p=x=€=ˆ==˜= =¨=°=¸=Ø=Ü=à=ä=è=ì=ğ=ô=ø=ü= >>>>>>>> >$>(>,>0>4>8><>@>D>H>L>P>T>X>\>`>d>h>l>p>t>x>|>€>„>>”>˜>œ> >¤>¨>¬>°>´>À>`?d?                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               dll\dacui.dbg i386\dacui.dll                                                                                                                                                                                                                                        f o l d e r .  F o l d e r   D e l e t i o n   E r r o r { Y o u r   f o l d e r   c o u l d   n o t   b e   d e l e t e d .   E i t h e r   t h e r e   i s   i n s u f f i c i e n t   m e m o r y ,   o r   a   c o n n e c t i o n   c a n CLASSES_ROOT\Interface\{0000013a-0000-0000-C000-000000000046}\ProxyStubClsid32; value name = ; value = {00000320-0000-0000-C000-000000000046}; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{0000013b-0000-0000-C000-000000000046}; value name = ; value = IEnumSTATPROPSETSTG; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{0000013b-0000-0000-C000-000000000046}\ProxyStubClsid32; value name = ; value = {00000320-0000-0000-C000-000000000046}; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{00000140-0000-0000-C000-000000000046}; value name = ; value = IClassActivator; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{00000140-0000-0000-C000-000000000046}\NumMethods; value name = ; value = 4; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{00000140-0000-0000-C000-000000000046}\ProxyStubClsid32; value name = ; value = {00000320-0000-0000-C000-000000000046}; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{00000141-0000-0000-C000-000000000046}; value name = ; value = IDLLHost; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{00000141-0000-0000-C000-000000000046}\ProxyStubClsid32; value name = ; value = {00000320-0000-0000-C000-000000000046}; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{0C733A30-2A1C-11CE-ADE5-00AA0044773D}; value name = ; value = ISequentialStream; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{0C733A30-2A1C-11CE-ADE5-00AA0044773D}\NumMethods; value name = ; value = 5; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{0C733A30-2A1C-11CE-ADE5-00AA0044773D}\ProxyStubClsid32; value name = ; value = {00000320-0000-0000-C000-000000000046}; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{99caf010-415e-11cf-8814-00aa00b569f5}; value name = ; value = IFillLockBytes; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{99caf010-415e-11cf-8814-00aa00b569f5}\ProxyStubClsid32; value name = ; value = {00000320-0000-0000-C000-000000000046}; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{4a8df970-8d9a-11cf-8827-00aa00b569f5}; value name = ; value = IDocfileAsyncConnectionPoint; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{4a8df970-8d9a-11cf-8827-00aa00b569f5}\ProxyStubClsid32; value name = ; value = {00000320-0000-0000-C000-000000000046}; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{260613d0-1655-11d0-af92-00aa00b50686}; value name = ; value = IRemoteActivator; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{260613d0-1655-11d0-af92-00aa00b50686}\ProxyStubClsid32; value name = ; value = {00000320-0000-0000-C000-000000000046}; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{a9d758a0-4617-11cf-95fc-00aa00680db4}; value name = ; value = IProgressNotify; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{a9d758a0-4617-11cf-95fc-00aa00680db4}\ProxyStubClsid32; value name = ; value = {00000320-0000-0000-C000-000000000046}; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{B196B284-BAB4-101A-B69C-00AA00341D07}; value name = ; value = IConnectionPointContainer; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{B196B284-BAB4-101A-B69C-00AA00341D07}\NumMethods; value name = ; value = 5; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{B196B284-BAB4-101A-B69C-00AA00341D07}\ProxyStubClsid32; value name = ; value = {00000320-0000-0000-C000-000000000046}; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{B196B285-BAB4-101A-B69C-00AA00341D07}; value name = ; value = IEnumConnectionPoints; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{B196B285-BAB4-101A-B69C-00AA00341D07}\NumMethods; value name = ; value = 7; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{B196B285-BAB4-101A-B69C-00AA00341D07}\ProxyStubClsid32; value name = ; value = {00000320-0000-0000-C000-000000000046}; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{B196B286-BAB4-101A-B69C-00AA00341D07}; value name = ; value = IConnectionPoint; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{B196B286-BAB4-101A-B69C-00AA00341D07}\NumMethods; value name = ; value = 8; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{B196B286-BAB4-101A-B69C-00AA00341D07}\ProxyStubClsid32; value name = ; value = {00000320-0000-0000-C000-000000000046}; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{B196B287-BAB4-101A-B69C-00AA00341D07}; value name = ; value = IEnumConnections; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{B196B287-BAB4-101A-B69C-00AA00341D07}\NumMethods; value name = ; value = 7; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{B196B287-BAB4-101A-B69C-00AA00341D07}\ProxyStubClsid32; value name = ; value = {00000320-0000-0000-C000-000000000046}; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{de2eacd0-9c9d-11cf-882a-00aa00b569f5}; value name = ; value = IFIllInfo; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{de2eacd0-9c9d-11cf-882a-00aa00b569f5}\ProxyStubClsid32; value name = ; value = {00000320-0000-0000-C000-000000000046}; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{F4F569D0-593B-101A-B569-08002B2DBF7A}; value name = ; value = IServerHandler; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{F4F569D0-593B-101A-B569-08002B2DBF7A}\ProxyStubClsid32; value name = ; value = {00000320-0000-0000-C000-000000000046}; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{F4F569D1-593B-101A-B569-08002B2DBF7A}; value name = ; value = IClientSiteHandler; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{F4F569D1-593B-101A-B569-08002B2DBF7A}\ProxyStubClsid32; value name = ; value = {00000320-0000-0000-C000-000000000046}; Succeeded.
+Writing registry key value: key = HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\OLE; value name = EnableDCOM; value = Y; Succeeded.
+Writing registry key value: key = HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\OLE; value name = EnableRemoteConnect; value = N; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\CLSID\{bdc67890-4fc0-11d0-a805-00aa006d2ea4}\InstalledVersion; value name = ; value = 4,71,0,1120; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{F29F6BC0-5021-11CE-AA15-00006901293F}; value name = ; value = IROTData; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{F29F6BC0-5021-11CE-AA15-00006901293F}\NumMethods; value name = ; value = 4; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\Interface\{F29F6BC0-5021-11CE-AA15-00006901293F}\ProxyStubClsid32; value name = ; value = {00000320-0000-0000-C000-000000000046}; Succeeded.
+Writing registry key value: key = HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Rpc\ClientProtocols; value name = ncacn_http; value = RpcLtCcm.Dll; Succeeded.
+Writing registry key value: key = HKEY_CLASSES_ROOT\CLSID\CLSID; value name = ; value = {0000031A-0000-0000-C000-000000000046}; Succeeded.
+Writing registry key value: key = HKEY_LOCAL_MACHINE\Software\Microsoft\IE4\Setup; value name = BindImageLogFile; value = Bind List Log.txt; Succeeded.
+Writing registry key value: key = HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Advanced INF Setup; value name = RegSaveLogFile; value = Reg Save Log.txt; Succeeded.
+Writing registry key value: key = HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Advanced INF Setup; value name = RegRestoreLogFile; value = Reg Restore Log.txt; Succeeded.
+Writing registry key value: key = HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\IE4\Setup; value name = RunOnceExLogFile; value = RunOnceEx Log.txt; Succeeded.
+Writing registry key value: key = HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\IE4\Setup; value name = NoRebootLogFile; value = Soft Boot Log.txt; Succeeded.
+Creating INI key value - file: 'D:\WIN95\telephon.ini',  section: 'CountryOverrides',  key: 'Country101',  value: '1,102,"Anguilla","G"," 1FG","011EFG"'
+Creating INI key value - file: 'D:\WIN95\telephon.ini',  section: 'CountryOverrides',  key: 'Country103',  value: '1,104,"Bahamas","G"," 1FG","011EFG"'
+Creating INI key value - file: 'D:\WIN95\telephon.ini',  section: 'CountryOverrides',  key: 'Country112',  value: '1,113,"Jamaica","G"," 1FG","011EFG"'
+Creating INI key value - file: 'D:\WIN95\telephon.ini',  section: 'CountryOverrides',  key: 'Country213',  value: '213,216,"Algeria","G","0FG","00,EFG"'
+Creating INI key value - file: 'D:\WIN95\telephon.ini',  section: 'CountryOverrides',  key: 'Country231',  value: '231,232,"Liberia","G","","0EFG"'
+Creating INI key value - file: 'D:\WIN95\telephon.ini',  section: 'CountryOverrides',  key: 'Country244',  value: '244,245,"Angola","G","0FG","00EFG"'
+Creating INI key value - file: 'D:\WIN95\telephon.ini',  section: 'CountryOverrides',  key: 'Country251',  value: '251,252,"Ethiopia","G","0FG","00EFG"'
+Creating INI key value - file: 'D:\WIN95\telephon.ini',  section: 'CountryOverrides',  key: 'Country252',  value: '252,253,"Somalia","G","","19,EFG"'
+Creating INI key value - file: 'D:\WIN95\telephon.ini',  section: 'CountryOverrides',  key: 'Country254',  value: '254,255,"Kenya","G","0FG","000EFG"'
+Creating INI key value - file: 'D:\WIN95\telephon.ini',  section: 'CountryOverrides',  key: 'Country256',  value: '256,257,"Uganda","G","0FG","00EFG"'
+Creating INI key value - file: 'D:\WIN95\telephon.ini',  section: 'CountryOverrides',  key: 'Country260',  value: '260,261,"Zambia","G","0FG","00EFG"'
+Creating INI key value - file: 'D:\WIN95\telephon.ini',  section: 'CountryOverrides',  key: 'Country33',  value: '33,34,"France","0FG"," 0FG","00EFG"'
+Creating INI key value - file: 'D:\WIN95\telephon.ini',  section: 'CountryOverrides',  key: 'Country377',  value: '377,378,"Monaco","G","","00EFG"'
+Creating INI key value - file: 'D:\WIN95\telephon.ini',  section: 'CountryOverrides',  key: 'Country34',  value: '34,350,"Spain","G","9FG","07,EFG"'
+Creating INI key value - file: 'D:\WIN95\telephon.ini',  section: 'CountryOverrides',  key: 'Country358',  value: '358,359,"Finland","G","0FG","00EFG"'
+Creating INI key value - file: 'D:\WIN95\telephon.ini',  section: 'CountryOverrides',  key: 'Country36',  value: '36,370,"Hungary","G"," 06,FG","00EFG"'
+Creating INI key value - file: 'D:\WIN95\telephon.ini',  section: 'CountryOverrides',  key: 'Country370',  value: '370,371,"Lithuania","G"," 8WFG","8W10EFG"'
+Creating INI key value - file: 'D:\WIN95\telephon.ini',  section: 'CountryOverrides',  key: 'Country372',  value: '372,373,"Estonia","G"," 8,2FG","8,00EFG"'
+Creating INI key value - file: 'D:\WIN95\telephon.ini',  section: 'CountryOverrides',  key: 'Country373',  value: '373,374,"Moldova","G"," 8WFG","8W10EFG"'
+Creating INI key value - file: 'D:\WIN95\telephon.ini',  section: 'CountryOverrides',  key: 'Country375',  value: '375,376,"Belarus","G"," 8WFG","8W10EFG"'
+Creating INI key value - file: 'D:\WIN95\telephon.ini',  section: 'CountryOverrides',  key: 'Country380',  value: '380,381,"Ukraine","G"," 8WFG","8W10EFG"'
+Creating INI key value - file: 'D:\WIN95\telephon.ini',  section: 'CountryOverrides',  key: 'Country47',  value: '47,48,"Norway","G","","00EFG"'
+Creating INI key value - file: 'D:\WIN95\telephon.ini',  section: 'CountryOverrides',  key: 'Country508',  value: '508,509,"St. Pierre and Miquelon","G","","19,EFG"'
+Creating INI key value - file: 'D:\WIN95\telephon.ini',  section: 'CountryOverrides',  key: 'Country509',  value: '509,51,"Haiti","G","","00EFG"'
+Creating INI key value - file: 'D:\WIN95\telephon.ini',  section: 'CountryOverrides',  key: 'Country53',  value: '53,5399,"Cuba","G","0FG","119EFG"'
+Creating INI key value - file: 'D:\WIN95\telephon.ini',  section: 'CountryOverrides',  key: 'Country57',  value: '57,58,"Colombia","G","0FG","00EFG"'
+Creating IS\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿò!  &       {9FC24A21-6E25-11D0-86DD-00A02416B03C}  ÿÿÿÿœ$   N   ÿÿÿÿ@"  &      {9FC24A21-6E25-11D0-86DD-00A02416B03C}          _AudRend€   ÿÿÿÿÀ"        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿ#  &       {7A969201-6FBB-11D0-86DD-00A02416B03C}          N2R   ÿÿÿÿY#  &      {7A969201-6FBB-11D0-86DD-00A02416B03C}          _AudFileRend€   ÿÿÿÿÙ#        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿ $  &       {7DA81AC1-6D29-11D0-86EE-00AA00C999A5}       N1610M   ÿÿÿÿm$  &      {7DA81AC1-6D29-11D0-86EE-00AA00C999A5}          _AudSrc€   ÿÿÿÿí$        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿ4%  &       {C198A1C1-777C-11D0-86EE-00AA00C999A5}boratories LiL   ÿÿÿÿ€%  &      {C198A1C1-777C-11D0-86EE-00AA00C999A5}          _AudFC€   ÿÿÿÿ &        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿG&  &       {B2FF4DE1-7D0C-11D0-A375-444553540000}e          R   ÿÿÿÿ™&  &      {B2FF4DE1-7D0C-11D0-A375-444553540000}          _AudPlayStrm€   ÿÿÿÿ'        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿ`'  &       {B2FF4DE2-7D0C-11D0-A375-444553540000}R.   ÿÿÿÿ*  Q   ÿÿÿÿ±'  &      {B2FF4DE2-7D0C-11D0-A375-444553540000}          _AudRecStrm€   ÿÿÿÿ1(        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿx(  &       {BD6164A1-8449-11D0-86DD-00A02416B03C} ÿÿÿÿ#+  	  P   ÿÿÿÿÈ(  &      {BD6164A1-8449-11D0-86DD-00A02416B03C}         
+ _TeeFilter€   ÿÿÿÿH)        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿ)  &       {09C98AE1-880D-11D0-86DD-00A02416B03C}.005        W   ÿÿÿÿæ)  &      {09C98AE1-880D-11D0-86DD-00A02416B03C}          _VideoVCMCompress€   ÿÿÿÿf*        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿ­*  &       {09C98AE2-880D-11D0-86DD-00A02416B03C} Priority.001Y   ÿÿÿÿ+  &      {09C98AE2-880D-11D0-86DD-00A02416B03C}          _VideoVCMDecompress€   ÿÿÿÿ†+        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿÍ+  &       {D75A9861-9E2D-11D0-86EE-00AA00C999A5}  B05_6Æ  ÿL   ÿÿÿÿ,  &      {D75A9861-9E2D-11D0-86EE-00AA00C999A5}          _PL wQ€   ÿÿÿÿ™,        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿà,  &       {D32029E4-A92C-11D0-86DD-00A02416B03C}riority.005|BR   ÿÿÿÿ2-  &      {D32029E4-A92C-11D0-86DD-00A02416B03C}          _BWRegulator€   ÿÿÿÿ²-        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿù-  &       {D32029E1-A92C-11D0-86DD-00A02416B03C}nType|Codec.0S   ÿÿÿÿL.  &      {D32029E1-A92C-11D0-86DD-00A02416B03C}          _OldVideoPack€   ÿÿÿÿÌ.        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿ/  &       {D32029E2-A92C-11D0-86DD-00A02416B03C}ty.004      U   ÿÿÿÿh/  &      {D32029E2-A92C-11D0-86DD-00A02416B03C}          _OldVideoUnpack€   ÿÿÿÿè/        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿ/0  &       {62667641-B652-11D0-86DD-00A02416B03C}    Renderer_Q   ÿÿÿÿ€0  &      {62667641-B652-11D0-86DD-00A02416B03C}          _H263Unpack€   ÿÿÿÿ 1        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿG1  &       {62667642-B652-11D0-86DD-00A02416B03C}rv003|LoadMulO   ÿÿÿÿ–1  &      {62667642-B652-11D0-86DD-00A02416B03C}         	 _H263Pack€   ÿÿÿÿ2        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿ]2  &       {53A945E1-FDFD-11D0-BF2C-00A02416B06B}in:   ÿÿÿÿé4 V   ÿÿÿÿ³2  &      {53A945E1-FDFD-11D0-BF2C-00A02416B06B}          _AudioFlowNotify€   ÿÿÿÿ33        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿz3  &       {1F3BCC21-8F07-11D0-86DD-00A02416B03C}      Bpnrv.€   ÿÿÿÿú3        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿA4  &       {235A5004-7798-11D0-A375-444553540000}   h-   ÿÿÿÿ²€   ÿÿÿÿÁ4        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿ5  &       {235A5003-7798-11D0-A375-444553540000}dth.006|Codec€   ÿÿÿÿˆ5        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿÏ5  &       {235A5002-7798-11D0-A375-444553540000}LoadMultiple|€   ÿÿÿÿO6        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿ–6  &       {235A5001-7798-11D0-A375-444553540000}l - 08   ÿÿÿÿ€   ÿÿÿÿ7        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿ]7  &       {C12EA122-87EA-11D0-86DD-00A02416B03C}   ÿÿÿÿ¤:   €   ÿÿÿÿİ7        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿ$8  &       {2A5CE8C1-9626-11D0-86DD-00A02416B03C}right (c) 199€   ÿÿÿÿ¤8        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿë8  &       {AAA07101-AE81-11D0-86DD-00A02416B03C} ÿÿÿÿ8:    €   ÿÿÿÿk9        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿ²9  &       {C12EA124-87EA-11D0-86DD-00A02416B03C}  Sswfber|Lo€   ÿÿÿÿ2:        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿy:  &       {870188E1-9317-11D0-86DD-00A02416B03C}ginFilename|P€   ÿÿÿÿù:        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿ@;  &       {A0DEA2A1-F7B9-11D0-BF2C-00A02416B06B}  ÿÿÿÿc<  	 €   ÿÿÿÿÀ;        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿ<  &       {96FC0F01-FC57-11D0-86EE-00AA00C999A5}meE   ÿÿÿÿÁ= €   ÿÿÿÿ‡<        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿÎ<  &       {AD47A802-1E26-11D1-A5DC-00AA00C999A5}MATgCopy     €   ÿÿÿÿ        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEMEDIA.DLL         ThreadingModelBothG   ÿÿÿÿ•=  &       {0E39F897-7381-11D0-BE40-00A024106100}  Version   ~   ÿÿÿÿ°        InprocServer32         2 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHE323.DLL         ThreadingModelBothG   ÿÿÿÿZ>  &       {6D216901-A923-11D0-86EE-00AA00C999A5}opyright|Plug€   ÿÿÿÿN=        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEAUDIO.DLL         ThreadingModelBothG   ÿÿÿÿ!?  &       {51244561-A04A-11D0-86EE-00AA00C999A5}-1998 RealNet€   ÿÿÿÿ>        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEAUDIO.DLL         ThreadingModelBothG   ÿÿÿÿè?  &       {51244563-A04A-11D0-86EE-00AA00C999A5}260.dll - 0 €   ÿÿÿÿÚ>        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEAUDIO.DLL         ThreadingModelBothG   ÿÿÿÿ¯@  &       {51244567-A04A-11D0-86EE-00AA00C999A5}12|Copyright|€   ÿÿÿÿ¡?        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEAUDIO.DLL         ThreadingModelBothG   ÿÿÿÿvA  &       {9E0D4403-DB3A-11D0-A377-444553540000}iple|Version|€   ÿÿÿÿh@        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHEAUDIO.DLL         ThreadingModelBothG   ÿÿÿÿ=B  &       {E9799F81-A9D3-11D0-86EE-00AA00C999A5} ÿÿÿÿºF    ƒ   ÿÿÿÿ/A        InprocServer32         7 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHECODECGSM.DLL         ThreadingModelBothG   ÿÿÿÿC  &       {E9799F82-A9D3-11D0-86EE-00AA00C999A5}lename      ƒ   ÿÿÿÿöA        InprocServer32         7 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHECODECTSP.DLL         ThreadingModelBothG   ÿÿÿÿÑC  &       {51244564-A04A-11D0-86EE-00AA00C999A5}/www.real.comƒ   ÿÿÿÿÀB        InprocServer32         7 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHECODECVSC.DLL         ThreadingModelBothG   ÿÿÿÿ›D  &       {CD171A01-B4E8-11D0-86EE-00AA00C999A5}ÿÿÿÿ®     ƒ   ÿÿÿÿŠC        InprocServer32         7 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTHECODECVSC.DLL         ThreadingModelBothG   ÿÿÿÿeE  &       {8D149B60-AB6C-11D0-9D77-444553540000}ÿÿÿÿÿÿ     sg   ÿÿÿÿTD        InprocServer32         9 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTGOLDDIALERAM.DLLL   É A L         GoldAEGUI.GOLDStatus.1          GoldAEGUI.GOLDStatus.1\   Ê A \   &      {2E93E511-C5E8-11D0-B046-00C02650037E}          GoldAEGUI.GOLDStatus.1K   Ë A K         CLSID         & {2E93E511-C5E8-11D0-B046-00C02650037E}<   Ì A <         ProgID          GoldAEGUI.GOLDStatus.1X   Í A X         InProcServer32         * D:\PROGRA~1\COMMON~1\VOCALTEC\VTGOLD~5.DLLN   Î A N         GoldAEGUI.UserInfoPpg.1          GoldAEGUI.UserInfoPpg.1]   Ï A ]   &      {A5BB54E1-B0C0-11D0-B022-00C02650037E}          GoldAEGUI.UserInfoPpg.1K   Ğ A K         CLSID         & {A5BB54E1-B0C0-11D0-B022-00C02650037E}=   Ñ A =         ProgID          GoldAEGUI.UserInfoPpg.1X   Ò A X         InProcServer32         * D:\PROGRA~1\COMMON~1\VOCALTEC\VTGOLD~5.DLLZ   Ó A Z         GoldAEGUI.ServiceManagerPpg.1          GoldAEGUI.ServiceManagerPpg.1c   Ô A c   &      {206904F1-AE72-11D0-B020-00C02650037E}          GoldAEGUI.ServiceManagerPpg.1K   Õ A K         CLSID         & {206904F1-AE72-11D0-B020-00C02650037E}C   Ö A C         ProgID          GoldAEGUI.ServiceManagerPpg.1X   × A X         InProcServer32         * D:\PROGRA~1\COMMON~1\VOCALTEC\VTGOLD~5.DLLG   ÿÿÿÿÈJ  &       {80D691D0-A441-11D0-BD06-00A024722E8C}             b   ÿÿÿÿE        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTINEVENT.DLLG   ÿÿÿÿqK  &       {236E1605-38D5-11D1-BD21-00A024722E8C}             b   ÿÿÿÿJ        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTINEVENT.DLLG   ÿÿÿÿL  &       {80D691D1-A441-11D0-BD06-00A024722E8C}             b   ÿÿÿÿ*K        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTINEVENT.DLLG   ÿÿÿÿÃL  &       {80D691D3-A441-11D0-BD06-00A024722E8C}             b   ÿÿÿÿÓK        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTINEVENT.DLLn   ÿÿÿÿ“M  &       {80D691D2-A441-11D0-BD06-00A024722E8C}                                                    b   ÿÿÿÿ|L        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTINEVENT.DLLG   ÿÿÿÿ<N  &       {1938F8D2-FB64-11D0-BD14-00A024722E8C}             b   ÿÿÿÿ%M        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTINEVENT.DLLG   ÿÿÿÿåN  &       {D7B6F500-0291-11D1-BD15-00A024722E8C}             b   ÿÿÿÿõM        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTINEVENT.DLLG   ÿÿÿÿO  &       {311F2710-13C5-11D1-BD17-00A024722E8C}             b   ÿÿÿÿN        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTINEVENT.DLLG   ÿÿÿÿ7P  &       {247BF4B0-2430-11D1-BD1C-00A024722E8C}             b   ÿÿÿÿGO        InprocServer32         4 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTINEVENT.DLLG   ÿÿÿÿàP  &       {3475C061-B27E-11D0-A5B8-00A0247588EC}             }   ÿÿÿÿğO        InprocServer32         1 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTINET.DLL         ThreadingModelBothG   ÿÿÿÿ¤Q  &       {810196E2-BD76-11D0-A5B8-00A0247588EC}             }   ÿÿÿÿ™P        InprocServer32         1 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTINET.DLL         ThreadingModelBothG   ÿÿÿÿhR  &       {8E1E1881-BD6F-11D0-9D85-004095226A79}             c   ÿÿÿÿ]Q        InprocServer32         5 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTINSINFRA.DLLG   ÿÿÿÿS  &       {8E1E1883-BD6F-11D0-9D85-004095226A79}             c   ÿÿÿÿ!R        InprocServer32         5 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTINSINFRA.DLLG   ÿÿÿÿ¼S  &       {ABBB1502-C56C-11D0-9D8C-004095226A79}             c   ÿÿÿÿËR        InprocServer32         5 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTINSINFRA.DLLG   ÿÿÿÿfT  &       {8E1E1884-BD6F-11D0-9D85-004095226A79}             c   ÿÿÿÿuS        InprocServer32         5 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTINSINFRA.DLLG   ÿÿÿÿU  &       {ADE3C3A1-C9F5-11D0-9D78-444553540000}             d   ÿÿÿÿT        InprocServer32         6 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTGOLDCMAAM.DLLG   ÿÿÿÿ»U  &       {D979030E-D11E-11D0-88F0-004095604083}             e   ÿÿÿÿÉT        InprocServer32         7 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTPTHOSPROXY.DLLG   ÿÿÿÿgV  &       {D979030D-D11E-11D0-88F0-004095604083}             e   ÿÿÿÿtU        InprocServer32         7 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTPTHOSPROXY.DLLG   ÿÿÿÿW  &       {D9790309-D11E-11D0-88F0-004095604083}             e   ÿÿÿÿ V        InprocServer32         7 D:\PROGRAM FILES\COMMON FILES\VOCALTEC\VTPTHOSPROXY.DLLG   ÿÿÿÿÌV  &       {D9790308-D11E-11D0-88F0-004095604083}             ª    A ª         enum         4Auto         1Ethernet 802.2         0Ethernet 802.3         2Ethernet II        
+ 5Token Ring         6Token Ring SNAP^    A ^   
+      maxconnect        , locationSystem\CurrentControlSet\Services\Vxd\NWLink–    A –   
+      RenameBase         file1D:\WIN95\winsock         file2D:\WIN95\SYSTEM\winsock         file3D:\WIN95\SYSTEM\win32s\winsock^    A ^   
+      maxsockets        , locationSystem\CurrentControlSet\Services\Vxd\NWLinkÁ  ÿÿÿÿÿÿÿÿ     file1D:\WIN95\winsock         file2D:\WIN95\SYSTEM\winsock         file3D:\WIN95\SYSTEM\win32s\winsock^    A ^   
+      maxsockets        , locationSystem\CurrentControlSet\Services\Vxd\NWLinkM   ÿÿÿÿ¿W        Members         Guest             Administrator    ‡   ÿÿÿÿèW        Access       	  RightType             DescriptionUsers can access services         IncludeDefaultRights       ÿÿÿÿåZ  	      StartStop       	  RightType            DescriptionUsers can start/stop services         IncludeDefaultRights    …   ÿÿÿÿl[        Edit       	  RightType            DescriptionUsers can modify services         IncludeDefaultRights       ÿÿÿÿAX        UserAdd       	  RightType            DescriptionUsers can create and edit users         IncludeDefaultRights   o  ÿÿÿÿÿÿÿÿers can create and edit users         IncludeDefaultRights   "  ÿÿÿÿÿÿÿÿ     ConfigFlags   )   ÿÿÿÿ[         Bindings             ×  ÿÿÿÿÿÿÿÿ      Bindings          FAMILY\0008          VREDIR\0008          VSERVER\0016u  ÿÿÿÿÿÿÿÿ             )   ÿÿÿÿ;[         MarkFlag             b    A b         Bindings          FAMILY\0008          VREDIR\0008          VSERVER\0016Ñ  ÿÿÿÿÿÿÿÿ                                                                                                                                                                                                                                                                                                                                                                                                                                                                     RGDBxp  ÆF   B ²)  ş  ¤Î6Ä¾:Hü1   ˜ B 1         UltraPackPolicy          303   ™ B 3         DefaultPolicy          HiPack1   š B 1         UltraToDefault          Yes.   › B .         MinFreeSpace          207   ¤ B *vš0/ é/ÿ‹;Ç‡¢ Sfÿv
+fÿvš`0Aéÿfÿv
+jšÿÿ  À…Û ÿ6;fÿv
+šL5XéÙş‹;Ç‡¢ Sfÿv
+š4oéÜş‹;Ç‡¢ Sfÿv
+š¨4¯éÅş‹;öG
+
+tfƒ~tTfƒ~tMöG
+tfƒ~t@‹;Ç‡¢ Sfÿv
+fÿvšŠ2ÿÿé…ş‹;öG
+
+tfƒ~tfƒ~töG
+tfƒ~u¸ é©ıfÿv
+jš	  Àu#ÿ6;fÿv
+fÿvš€3&éşfÿv
+jšL  Àt¸ éqıÿ6;fÿvfÿv
+šJ,é[ı¸ éWıÄ^
+f&ÿw&ÿ7fÿvWèE é>ıfƒ>Œ; …4ıf‹Ff£Œ;fPšÆké"ıfÿvšØvëfÿvšë	fÿvšÄX ^_ÉÊ È`  WV‹F‰F jj@fÿvj F Pšòÿÿ‹F¢‰FÎ‹F¤‰FĞÇFÒ&‹FÈ‰Fôf‹FÊf‰FöFÔPF¨Pšÿÿ  ‹vƒş,v¾, FÎ‹øŒVü‰vş‹v‹NşëFü‹ßG&ŠF‹ŞF&ˆ‹ÁIÀuç^_ÉÊ U‹ìW¡¸ ¶ t
+¡¶ ‹¸ _ÉËSW3ÿ¸„»3 ÇÍ/Œ¸ ‰>¶ _[ëÚÈ  ÇFş  ÇFø= èºÿ‰Fú‰VüĞu3ÀÉÃ‹Føÿ^ú‰Fş‹FşÉÃÈ  ÇFş  ÇFø? èŒÿ‰Fú‰VüĞu3ÀÉÃ‹Føÿ^ú‰Fş‹FşÉÃÈ„  WVh@ j jš  ‹Ğ+É‰Nü‰FşÑu¸ éş	‹vf‹Fü‹Vşf‰„‹ØÂ&ÇG™&ÇG&‰w
+&‰Ojh fÿ4QRPšò¨hB j hX1šÿÿ  ‹Ğ+É‰Nö‰FøÑt¨‹Á‹Ş‹Vø‰š‰—œÂ‹Ù¾R¹ëó¥‹Ø¿Ø¾(	¹ù ó¥‹Ø¿Ê¾¹Ró¥‹Ø¿n&¾Ô ¹Ÿ ó¥‹Ø¿¬'¾¹ ó¥‹Ø¿â'¾H¹ ó¥‹Ø¿„0¾~¹j ó¥‹Ø¿ 0¾¾)¹ ó¥‹Ø¿80¾ö)¹ ó¥‹Øf&Ç‡ú/5  &Ç‡ş/	 &‰‡p0f&Ç‡r0 
+ f&Ç‡v0 ( f&Ç‡z0  f&Ç‡~0  &Ç‡‚0 ‰Fú: ‰Fü‰Vş‹ø‹vúÿ62 „/PÿvşWj@š+  ÿ62 „8PEğÿvşPjšY  Ç¦ Fƒş	rË3ö‹Fö‹Vø‹ø‰Vşÿ62 „HPÿvşWj@šp  ÿ62 „KPEğÿvşPjš  Ç¦ FƒşrË3ö‹Fö‹Vøî‹ø‰Vşÿ62 „RPÿvşWj@šµ  ÿ62 „˜PEğÿvşPjšÿÿ  Ç” Fƒş5rË‹~‹vööE
+ …Ê ÿvøVjèõÿvøVjèëÿvøVj	èáÿvøVjè×Føf&ƒ¬Úf&ƒ¬&ƒ¬r&¸ÿÿ&‰„È'&‰„Ê'f&ƒ¬nf&ƒ¬D&ƒ¬x&&‰„Ú'&‰„Ü'Vj'èÿvøVj2èƒFø&ÿŒş/&ƒ¬ü/f&ÿŒø&Ç„¸'ÿÿ&Ç„î'  öE
+ u&VjèSÿvøVjèIÿvøVj3è?ÿvøVj4è5Wj è®öE
+8uLÿvøVjèÿvøVjèFø&ÿŒü/f&ÿŒÚf&ÿŒ&ÿŒr&&Ç„Æ'ÿÿf&ÿŒnf&ÿŒD&ÿŒx&&Ç„Ø'ÿÿƒ} uƒ} u
+ÿvøVjèÆöE
+t=ÇFô Føi~ô” ‹Şf&ÇF   ÿFôƒ~ô#ræVj)è–ÿvøVjèŒÿvøVjéÌ öE
+tÿvøVj)èsÿvøVjèiÿvøVjéöE
+„Â f¸   Føf&‰„Z&‰„*&Ç„,  &‰„Ê&Ç„Ì  ŠE$<sOf&Ç„î   f¸   ™f&‰„&‰„n	&Ç„p	  &‰„&‰”&‰„2&Ç„4  &‰„
+&‰”
+&‰„¢&Ç„¤  VjèÑÿvøVjèÇÿvøVjè½ÿvøVjè³ÿvøVjè©ÿvøVjèŸÿvøVjéPöE
+„– f¸    Føf&‰„¾&‰„^&Ç„`  VjèkÿvøVjèaÿvøVjèWÇFô Føi~ô” ‹Şf&ÇF@   ÿFôƒ~ô&væÇFô i~ô” f&ÇF@   ÿFôƒ~ôvèÇFô
+ i~ô” f&ÇF@   ÿFôƒ~ôvèé¶ öE
+ „¤ ÿvøVjèæÿvøVjèÜÿvøVjèÒÿvøVjèÈÿvøVjè¾ÿvøVjè´ÿvøVjèªÇFô Føi~ô” ‹Şf&ÇF@   ÿFôƒ~ô'væÇFô i~ô” f&ÇF@   ÿFôƒ~ô	vèÇFô
+ i~ô” f&ÇF@   ÿFôƒ~ôvèë
+ÿvøVj)èBh j
+‹^fÿ7j FôPšòéƒ~ôDtƒ~ôEtƒ~ôGtƒ~ôJ…F‹^öG
+
+uAÄ^öf+Àf&‰‡À+f&‰‡Ä+f&‰‡ä+f&‰‡è+ÿvPjjPPšfj[fÿvöjèÑfÿvöjèÇf+Àf‰FüPjPjFüPj jh9h¬7‹^fÿ7èHùƒÄ‹^öG
+u+Ä^öf+Àf&‰‡,f&‰‡,ÿvPjjPPšfjÅfÿvöjèif+Àf‰FüPjPjFüPj jh9h¬7‹^fÿ7èêøƒÄ‹^öG
+uAÄ^öf+Àf&‰‡P,f&‰‡T,f&‰‡t,f&‰‡x,ÿvPjjPPšfjıfÿvöjèÿfÿvöjèõf+Àf‰FüPjPjFüPj jh$9h¬7‹^fÿ7èvøƒÄ¾|ÿ¾*9¹ ó¥fÇFú    h €j†|ÿPFúPšÿÿ  Ğ… fÇFğ   fÿvúh`9j j j j FÿPFğPšÿÿ  ĞuM‹^öG
+#tD€~ÿu>fÿvöjèVfÿvöjèLf+Àf‰FìPjPjFìPj jh$9h¬7‹^fÿ7èÍ÷ƒÄfÿvúšÿÿ  fÇFä,   F²‰FèŒVê‹^Sfÿ7j NäQš¾îf‹FöşfPF²Pj&š¹Ä^öf&Ç‡ö   ‡²PF²Pj&š¹,Ä^öf&Ç‡ª   ‡¤PF²Pj&š¹]Ä^öf&Ç‡œ   fÇFä0   F²‰FèŒVê‹vVfÿ4j NäQš®rf‹Fö‚ fPF²Pj&š¹²Ä^öf&ÇGz   fÇFä2   F²‰FèŒVêfÿ4j NäQè±	f‹Fö(fPF²Pj&š¹üÄ^öf&Ç‡    ¾ ‡Î‹øŒFşfÇFä,   F²‰FèŒVêPj,‹^fÿ7VšŠ9ÿvşWF²Pj&š¹OFş]øf&Ç   Ç¦ Fƒş|·‹~‹vöfÇFä,   F²‰FèŒVêPj,fÿ5jšŠm‹Æ‹VøÀRPF²Pj&š¹ƒFøf&Ç„¸   fÿvèÿväfÿ5jšŠ¡‹Æ‹VøXRPF²Pj&š¹·Føf&Ç„P   fÿvèÿväfÿ5jšŠó
+‹Æ‹VøRPF²Pj&š¹£
+Fø&Ç„ 3À&‰„^_ÉÊ È  WV‹~‹^‹óF
+kÇğ&‹„n&‰Fş&‹Œp&‰Nü= tOƒùÿuiğ¦ ŒÀóf&ÿŒüëkvş	vüöŒÀó&ÿŒâ'‹ókÇğf&Ç„n& 	 ‹ó‹ÇÁàğ&Ç„„0”H&Ç„†0u^_ÉÊ È WV‹~‹…š‹•œ‹ğ‰VøfÇFæ   ƒ~ tRj jj h †æşPj j fÿ5è½ôƒÄÀ…4†æşPhº šÿÿ  h €j†æşPFîPš,  ĞtfÇFî    ƒ} „LFø&ƒ¼°'„ï„º'ŒFşÇFú ‰Fü‰vö‹ø‹Nú]ş&‹&‰&‹E4&‰E6OOâë‹~Fø&Ç„°' &Ç„æ'  &ÿ„ş/f&ÿ„ø&Ç„*' &Ç„0' &Ç„6' &Ç„B' &Ç„Z' &Ç„l' &Ç„r' &Ç„x' &Ç„„' &Ç„œ' Vj%j jh‰hîuèTÿvøVj&j jhh¦vè@ÿvøVj0j jh±h
+xè,ÿvøVj1j jhÑhxxèƒ} tƒ} t(ÿvøVj$j j håhTuèøÿvøVj/j j hhªwèäƒ} tVöE
+ uPÿvøVjjjÿhhØxèÄÿvøVjjjÿh-hØxè°ÿvøVj3jjÿhAhÔyèœÿvøVj4jjÿhìhÔyèˆfÿvîhh9j j j j FòPFæPš¬  ĞtfÇFò €  ‹FòFø&‰„”-&Ç„–-  PWšHNÙƒÄfÿvîhx9j j j j FòPFæPšY  ĞtfÇFò € €‹FòFø&‰„¸-&Ç„º-  ‹Fô&‰„¼-&Ç„¾-  PÿvòWš\N1ƒÄfÿvîh†9j j j j FòPFæPšW  ĞtfÇFò?   ŠFò% Fø&‰„Ü-&Ç„Ş-  ÿvòWšpN®ƒÄöE
+ uwfÿvîh–9j j j j FòPFæPšÎ  ĞtfÇFòÿÿÿÿ‹FòFø&‰„€)&Ç„‚)  ‹Fô&‰„„)&Ç„†)  ‹Fò&‰„ *&Ç„¢*  ‹Fô&‰„¤*&Ç„¦*  PÿvòWšĞ[ÿƒÄfÿvîh¨9j j j j FòPFæPš  Ğtf+Àf‰FòŠFò% Fø&‰„ /&Ç„"/  fƒ~ò tj WšHNRƒÄfÿvîh¶9j j j j FòPFæPšr  Ğtf+Àf‰FòŠFò% Fø&‰„D/&Ç„F/  fƒ~ò tj j Wš\N£ƒÄfÿvîhÂ9j j j j FòPFæPšË  Ğtf+Àf‰FòŠFò% Fø&‰„h/&Ç„j/  fƒ~ò tj WšpNƒÄöE
+ …fÿvîhĞ9j j j j FòPFæPše  Ğtf+Àf‰FòŠFò% Fø&‰„°/&Ç„²/  ŠFò% &‰„Ô/&Ç„Ö/  fƒ~ò tj j WšĞ[ŒƒÄĞé°Fø&ƒ¼°'té¢Vj$è úÿvøVj%è–úÿvøVj&èŒúÿvøVj/è‚úÿvøVj0èxúÿvøVj1ènúFø&Ç„*' &Ç„0' &Ç„6' &Ç„B' &Ç„Z' &Ç„l' &Ç„r' &Ç„x' &Ç„„' &Ç„œ' &ÿŒş/f&ÿŒø„°'‹øŒFüÇFş ‰vö‹^ş&‹E&‰&‹E8&‰E6GGKuì‹~Ä^ö&Ç‡º'ÿÿ&Ç‡ğ'  ƒ} tƒ} tSj$èÊùfÿvöj/èÀùƒ} t.öE
+ u(fÿvöjèªùfÿvöjè ùfÿvöj3è–ùfÿvöj4èŒùƒ~ „~Ä^öf&‹‡”-f‰Fêfÿvîhh9j j j jFêPj jš«  Ä^ö&‹‡¼-‹Ğ&‹¸-&—º-‰Nê‰Vìfÿvîhx9j j j jFêPj jšÖ  Ä^öf&‹‡Ü-f‰Fêfÿvîh†9j j j jFêPj jš  öE
+ u8Ä^ö&‹‡„)‹Ğ&‹€)&—‚)‰Nê‰Vìfÿvîh–9j j j jFêPj jš?  Ä^öf&‹‡ /f‰Fêfÿvîh¨9j j j jFêPj jšj  Ä^öf&‹‡D/f‰Fêfÿvîh¶9j j j jFêPj jš•  Ä^öf&‹‡h/f‰FêfÿvîhÂ9j j j jFêPj jšÆ  öE
+ u+Ä^öf&‹‡°/f‰FêfÿvîhĞ9j j j jFêPj jšÿÿ  ^_ÉÊ È  WV‹~‹^‹óFkÇğ‰vüŒFş&ƒ¼n&uTƒ~
+ÿuiv¦ óf&ÿ„üëkv	v
+öó&ÿ„â'‹FÄvü&‰„n&‹F
+&‰„p&‹F‹V‹óF‹ÏÁáñ&‰„„0&‰”†0^_ÉÊ Èf  WVjjfÿvÿv
+FÌPšòåÀ…› ‹FÌ‰Fš‹FÎ‰Fœ‹FĞ‰F‹Fò‰FÀ‹Fô‰FÂ‹Fö‰FÄ‹Fø‰FÆf‹Fúf‰FÈF PFÒPšÔ  3öšÿÿ  ‹øøt/‰~şVFÌPj2šÿÿ  ƒ~Ìu~Î.t~Î-u‹FĞ‰FF;÷rÔÄ^f&ÿwFšP&‹=2 v¸2 Pš¹i^_ÉÊ
+ U‹ìV‹vÿ´ š'  ÿ´œšÿÿ  fÇ„š    ^ÉÊ È  WV‹v‹^
+‹„š‹”œ‹ø‰VöÇFø  ió¦ ‰vòğÂf&ƒ¼ø tjkËÁ¬'‰Fü‰Vş‹vø‰~ô‹Ø‹FFş&9tCCF+À‹~òFö~ô&9…úwàr&9µøw×‹~ôk^
+	ŞÁã‹FöÀßÃ(f&‹f‰Füƒ~ t&€ë	‹vøëÓ&€'şf‹Füf&9t=‹F
+‰Fú‰vüFö&‹‰FşÀt'‹ğfÿtÿt
+ÿthĞfÿtfÿvúj j šÿÿ  ‹töuÛ^_ÉÊ È  V‹^
+F&‹‡ú/+Ò;Vwr;Fw¸ëiv” óÆÊ&÷D €uè3À^ÉÊ È  WV‹~fÿv
+Ff&‹Ef‰FüfPè£ÿ‹ğğ…‹FüiÈ” N
+‹VÁÊ‰Nò‰VôkØ^
+Â&‹·r&F+À&;uu&;E
+t&ƒ}u&9E
+t¸éÔ ‰vğ‹ÎFf&ƒ}u¹ Ä^ò&‹G
+*ä‹Ø+Òƒû„« = tV= tQ‰VöÉ„˜ ‰NğF&‹E&‹U‰Vú‹Nö‹ØFú‹ûŒFşÄvòf&‹DhFşf&9w‘f&‹Fôf&9DdwƒƒÃA9NğwĞëP‰Nğ3É‹~ğÿtDÄv&‹D&‹T‹Ø‰VúFú‹ûŒFşÄvòf&‹DhFşf&9Aÿf&‹Fôf&9Dd1ÿƒÃA9NğwÌ3À^_ÉÊ U‹ìW‹~‹^F
+&‹‰E&‰?_ÉÊ È
+  WV‹~‹]fÿ·šjšæ  Àu=‹u‹„š‹”œ‹Ø‰VşÂ‹ğ&ƒ< t#Fş&‹;Çt‹ğƒÆ‹ŞŒ^şƒ< uçë‹ğ‹D&‰^_ÉÊ È0  WVjj fÿvÿvFĞPšò
+ÇFÖ&Ä^
+&‹G&‹W&‹ƒù.v¹. ‹øvÒÂÑéó¥Éó¤3À™^_ÉÊ
+ U‹ìWVj@jšÿÿ  ‹ğğu¸ ëNf‹F‹Vf‰Ä^
+&‹‰Lf&‹Of‰Lƒâ‰T
+f&‹G
+f‰DÇD  ‹F‰D‹Øfÿ·šVè×şÄ^3À&‰7&‰G3Ò^_ÉÊ U‹ìV‹vVèÒşVšÿÿ  3À™^ÉÊ È*  WV‹~ÿu¸ é\‹]ƒ u¸ éMf‹‡šf‰Fê‹v
+Ff&‹f=¦   v¸¦ ‰Fè&‰&ÇD  ƒnèŠF% +ÒÀt5H„HtHt>H„¸ éı&‹D&‰D&‰T&‹D&‰D&‰T
+=ÿÿ…ã‹^
+f&ƒ†æ¸ ™éÌ3É‹Fê‹Vìğ‹Ø‰VşFf&‹DFşf&;t
+Ã¦ AƒùråƒùtÄ^
+&‰O&ÇG  ë­ÇFô  f‹Fê¬'f‰Fğ‹Fêøf‰FöÇFú  Ä^öf&‹f‰Fäf=    tG‹Fğ‹Vò‰Vş‹Ø‹~úÄv
+&‹D&‹TFş&i7¦ Fìvê&9Du&9TtCCG+À9FæwÑr9~äwÊ‰~ú‹Fú+Ò;Fä…ë;Væ…äƒFğFö¦ ÿFôƒ~ô‚zÿé|‹~ê&ƒ¼€ t&¼€ ‰ …f&‹Dx&‹Tzƒú …WHtHt:HtGH„IHtQéC&ƒ¼‚ ht
+&ƒ¼‚ …1…ˆ ÿvìP„† Pšÿÿ  ÀtTé&ƒ¼‚ ……¸ëÚ&¼‚ .t8&¼‚ -ëÙ&¼‚ ‘t&&¼‚ ’t&¼‚ “t&¼‚ •t&¼‚ ”…Æ3É‹Ç‹VìP‹Ø‰Vş‹v
+FŒÀFş&‹&‹À&9Txu&9|zuFş&‹G
+F&9„‚ t
+Ã¦ AƒùrÈƒù…GşfÇFò    f‹Fê¬'f‰Fî‹Fêøf‰FöÇFú  Ä^öf&‹f‰Fäf=    tg‹Fî‹Vğ‰Vş‹Ø‹~ú‹FòÇ‰FâÄv
+&‹Dx&‹TzFş&i7¦ Fìvê‰vŞŒFà&9Dzu&9T|uÄv
+&‹„‚ ÄvŞ&9„„ tCCG+À9Fæw±r9~äwª‰~ú‹Fú+Ò;Fäu ;VæuƒFò	ƒFîFö¦ ÿFôƒ~ô‚Zÿé¯ ‹v
+‹FôF&‰D&ÇD  ‹Fú&‰D&ÇD
+  &‹\&‹Lƒûv7éı&‹G&‰G&ÇGÿÿiÀ¦ Fê‹Vìè‹Nè‹ğÚÑéó¥Éó¤3Àé· ‰Nú‹ñiû¦ ~êFì&‹…ø&‹•ú- ƒÚ +É;Ñwr$;Ær kû	ş‰~âÿ~ê‰~ÚŒFÜ&‹…¬'‰Fş=ÿÿu¸ ëg‰^ô‹ËÄ^
+&‰O&‰wGiVş¦ Vê‹NìƒÂ‹ñ‹Nè‰FÖŒFØV‹ø‹òÑéó¥Éó¤‹vâÁæÄ^êf&‹€(Ä^Öf&	Ä^Ú&‹‡â'Ä^
+&‰G$3À&‰G&3Ò^_ÉÊ
+ È  WV‹vöu¸ éÃ‹\ƒ u¸ é´‹ş‹]‹‡š‹—œ‹È‰Vô‹v
+Ff&‹Df‰FêŠF% +ÒÀtH„H„“¸ éw&‹|ƒÿ‡Ä‰Nò‹Ş‹ñ&‹G‰Fî=ÿÿu‹ÙFôiÇ¦ Øf&‹‡üf‰Füë;‹Fî‹ŞFôiÏ¦ Ù‰Fæ‰Vèf&‹‡øfHf;Fæ‚vkß	^îÛŞ&‹‡â'‰FüÇFş  f‹FüÄ^
+f&9Gt¸ éó‰~ğÇFö  Fô&ƒ¼ú/ te‹ÆÊ‰FüŒFş„n&‰FøŒFúÄ^ø&‹9Fğu,‹Fî&9Gu#Ä^üŒÂ&‹‹óÚÄ~êÑéó¥Éó¤Ä^
+&‹GFêFü” ƒFøÿFö‹FöÄ^ò&9‡ú/w°Ä^
+f&ÇG”   éj‰Nò‹ñÿvôQ‹^
+f&ÿwè)÷‹øøt+ÒéNÄ^
+&iw” Ä^òf&‹€Ê&‹ÌÄ^
+f&‰G&‹GiĞ” Vò‹NôÂÊ‹ñ&‹OV‹òÄ~êÑéó¥Éó¤kØ^òFôf&‹n&Ä^
+f&‰Oéè &‹D‰Fğ= w6‰Nò‹Ş‹ñ&‹G‰Fî=ÿÿt)Fôi^ğ¦ Ù&‹ø&‹¿úƒéú;úwr;Ès¸ é¢ 3ÿFô&9¼ú/tO‹ÆÒ‹ÈŒFú„n&‰FüŒFş‹Ø‹FğFş&9u‹Fî&9Gu‹ñFúf&‹Äv
+f&9DtÁ” ƒÃGÄvò&9¼ú/wÇÄ^ò&9¿ú/u¸ë8‰~öi÷” f&‹€ÊÄ^
+f&‰Gvò‹NôÆÊ‰Nä‹È‹VäÚÄ~êÑéó¥Éó¤3À3Ò^_ÉÊ
+ È0  WV‹^‹‡š‹—œ‹ø‰Vôƒ u¸ é‰~òÿvôWÄ^
+f&‹Gf‰FöfPèõ‹øø…ö‹v
+‹~òk^ö‹FôßÀ&‹‡r&‰Fî+ÒF&;Du&;T
+t&ƒ|u&9T
+t¸é¹i^ö” ‹FôÀßŒFèFf&‹DFèf&9‡ÚuØf&‹‡Òf‰FüŠF% +ÒÀtH„´¸ év‹Fü‹Vş= uêtwêÿ`„ü ‹~
+‹Fî+ÒF&9Eu&9U
+té^f&‹Ef‰FêÇFğ  ƒ~î t;kFö$Fò‹Vô„(‰Fü‰Vş‹Fî‰Fú‹^ü‹ÈFşf&‹Ävêf&‰F&‹EFêƒÃâã‹v
+é‹~òFô&‹…z0@@+Ò;Föu#;Vøu‹^9W"tkÀ$Ç„(PSšbT%ƒÄéZÿ&‹…z0@;Föu;Vøt&‹…z0;Föu;Vøu‹^9W$tkÀ$Ç„(PSšz[5%ëÁkFö$‹VôÇ„(RPÿvVÿvš¦:Iéÿ‹~òFf&‹Df‰FîÇFú  f&ƒ| t[kFö$Ç„(‹Nô‰Fü‰Nş‹Ø‹Nú‹~
+Fşf&‹Ävîf&‰F&‹EFîƒÃA+À&9EwÜr&9MwÔf&ÇE   f&ÇE   éè‹~
+ëæ‹÷&ƒ|u&9T
+t¸ éĞ‹Fş% ğ‹È‹Ğ+Àê ÷Âÿ…Ø Áêƒú
+‡Î ‹Ú.ÿ§ô% &V& &‚&‚& &f&‹Df‰Fê‹~òk^ö$‹FôßÀf&‹‡ˆ(f‰FÚf&‹‡„(f‰Fâ™3Â+Â‹Èf‹FÚf‰FŞ™3Â+Â;È~‹Fâ‹Väë‹FŞ‹VàÄ^êë^‹~òk^ö$‹FôßÀf&‹‡„(f&‡ˆ(f=    t¸ ë3À™ë+‹~òk^ö$‹FôßÀf&‹‡„(&‹—†(f&;‡ˆ(s
+&‹‡ˆ(&‹—Š(F&Ä\&‰&‰WFf&ÇD   f&ÇD    éÆ f~ü qt¸é¸ Ff&‹Df‰Fî3ÿ&9|ƒ ‹Fö@+Ò‰FÖ‰VØkFö	‰FÔ‰~ş‹÷‹~ò‹Ö‹NÖVØÄ^î&‰&‰W‹^ÔŞÛ‹FôßÀ&iŸ¾'¦ ßf&‹O‰^Ğ‰FÒÄ^îf&‰OGPf‹FĞ: fPš®  Ä^
+&‹GFîF&9w ‰vş‹ó‹~şf&ÇDH   f&ÇD   ‹Ç™&‰|&‰T3À^_ÉÊ
+ È"  WVöFt¸ é‹~‹…š‹•œ‹ğ‰Vğƒ} u¸ éê‰vî‹şÿvğVÄ^
+f&‹Gf‰FôfPèAñ‹ğğt‹ÆéÄ‹÷‹Fôkø‹ŞFğ&‹‰r&‰Nò‹~
+iØ” Ş‰^àŒFâFf&‹EFâf&9‡Út¸é‡+ÒF&9Mu&9U
+t&ƒ}uâ&9U
+uÜFâ&‹‡Ò&‹—Ô- ÚqÂ„ ÿvğVÿvWèóğ‹øø…;Ä^
+f&‹Gf‰FêÇFø  ‹^ò‹şÛtKkFô$Æ„(‹Nğ‰Nş‰^ú‹Ø‹~
+‹NúÄvêf&‹Fşf&‰‹Fò+ÒF&9Eu&9U
+u&‹EFêƒÃâÒ‹~îfÿvÿv
+‹^ôÁã‹FğÀß&ÿŸ„0‹ğğ„}ééşfƒ~ô u¸ ë¸ ‰FŞ‰FøÇFè  ‹~€½‡uf‹…ƒf9…t¸ ë¸ ‰FèÇFú  f&ƒ¿Ú tAkFøÆ¬'‹Nğ‰Nş‹ğ‹~úÿvÿvøFş&ÿ4j èÃîFFG+ÀÄ^à&9‡Üwßr&9¿ÚwÖ‹vîÄ^
+f&‹Gf‰Fäk~ô$‹ŞFğf+Àf&‰„(‰FòÄ^à&9‡Üu	&9‡Ú„ÿkFô$Æ„(‹Nğ‰Fê‰Nìfƒ~ô u¸ ë¸ ‰FøÄ^äf&‹Ä^êf&‰‹Fè9FŞuOÇFú  Ä^àf&ƒ¿Ú t>kFøÆ¬'‹Nğ‰Nş‹ğ‹~úÿvÿvøFş&ÿ4jèîFFG+ÀÄ^à&9‡Üwßr&9¿ÚwÖÄ^
+&‹GFäƒFêÿFò‹Fò+ÒÄ^à&9—Üw‚nş&9‡Ú†eş‹vîéhÿFğ&‹5öt,‹~
+fÿtÿt
+ÿthÑfÿtFf&ÿuj j š  ‹töu×3À^_ÉÊ
+ U‹ìWV¸; Øƒ>8  tjš<_3ÀéÅ ‹~‹Ç=g „Ow$şÈ„‘ şÈ„¶ şÈ„à ,a„şÈ„şÈ„ƒ~v¸ é‡ ‹v‹Ç‹L- tHtHt#Ht0Ht?¸ ëiVè³ğé Vfÿv
+fÿvè½ğéğ Vfÿv
+fÿvè%õéà Qfÿv
+fÿvèó÷+ÒéÎ Qfÿv
+fÿvè!üëìfÿv
+š’¿+‹ğğu3Àº é¨ ƒ| t¸ 3Òéš 3À™é” ‹~ƒÿ‡^ÿfÿvš’ï+‹ğğ„Mÿƒ| t1Wfÿv
+fÿvèTïëdƒ~wÄ^
+f&ÿwš’,‹ğğuéÿƒ| u¸ ëVfÿvfÿv
+fÿvèlïë*fÿvšÆ*,ëfÿvšØ5,ëfÿvš@,ë	fÿvšÄ×*^_ÉÊ È  fƒ~
+u/fÇFü   ‹^öG
+ufÇFü€  öG
+
+u€NıpöG
+8t0€Nıë*fƒ~
+u-fÇFüÿ  ‹^öG
+ufÇFüÿƒ  öG
+
+u€NıpöG
+ t€Nşf‹FüÄ^f&‰ÉÊ
+ È
+  WV‹~
+ÇFö  f‹F‹Vf‰Fü‹Ç= w_Ç“.ÿ§ğ,----#-*-1-8-?-ÇFø ÇFú  ë9ÇFø0 ëòÇFøÀ ëëÇFø ëäÇFø ëİÇFø ëÖÇFø  ëÏÇFø ÀëÈfÇFø   jh ‹^fÿ7j FöPšòÔ-Àt¸ ë‹vƒ¼¢ t
+VfÿvWèQ3À^_ÉÊ È
+  WV‹v‹~
+‹F‹V‹ßÁã‰‡Ä ‰—Æ ÇFö ‰Fü‰Vş‹ÇHu¸ ë¸ 3Ò‰Fø‰Vújh fÿ4RFöPšòÜ$Àt¸ ëƒ¼¢ t
+VfÿvWè@3À^_ÉÊ È  WV‹v‹~
+‹„š‹”œ‹ØÂ&¿v0k÷$ğ&‹„ˆ(&‹Œ„(Ä^&‰&‰G3À^_ÉÊ È
+  ÇFö f‹F
+f‰Føjh€ ‹^fÿ7j FöPšò¦.Àt¸ ëŠFü*äÄ^&‰3ÀÉÊ
+ È
+  ÇFö f‹Ff‰Füf‹F
+f‰Føjh ‹^fÿ7j FöPšòí.= õÀ% ÉÊ
+ È  WV‹~
+ÇFö ƒÿu¸ ë¸ 3Ò‰Fø‰Vújh€ ‹^fÿ7RFöPšòš/Àt¸ ë1‹^f‹FüFf&‰‹÷Áæf‹„Ä f‰Fòf#„È f&;uf‹Fòf&‰3À^_ÉÊ È  V‹vfÇFüğ  fÇFøğ  öD
+8tfÇFüğ+  fÇFøğ  öD
+ tfNü€ fNø@ fƒ~ü t[ÇFî f‹Füf‰Fğjh€ fÿ4j FîPšòĞ/+ÒĞt¸ é± fÿv
+è	Fô	Vöf‹Fôf‰F
+jh fÿ4j FîPšòü/ÀuÌfƒ~ø tXÇFî f‹Føf‰Fğjh€ fÿ4j FîPšò,0+ÒĞu.fÿvè¬	Fô	Vöf‹Fôf‰Fjh fÿ4j FîPšò\-Àtémÿƒ¼¢ tVfÿv
+èõRPfÿvèëRPjèß3À^ÉÊ
+ È  V‹vfÇFüğ  fÇFøğ  öD
+8tfÇFüğ+  fÇFøğ  öD
+ tfNü€ fNø@ fƒ~ø uf‹Ff	F
+fƒ~ü t_ÇFî f‹Füf‰Fğjh€ fÿ4j FîPšò1+ÒĞt¸ é¸ fÿv
+èÉ÷Ğ÷Ò!Fô!Vöf‹Fôf‰F
+jh fÿ4j FîPšò?1ÀuÈfƒ~ø t[ÇFî f‹Føf‰Fğjh€ fÿ4j FîPšòs1+ÒĞušfÿvèi÷Ğ÷Ò!Fô!Vöf‹Fôf‰Fjh fÿ4j FîPšò2À…fÿƒ¼¢ tVfÿv
+è¯RPfÿvè¥RPjè™3À^ÉÊ
+ È  V‹v
+fÇFüğ  fÇFøğ  öD
+8tfÇFüğ+  fÇFøğ  öD
+ tfNü€ fNø@ fƒ~ü t8ÇFê f‹Füf‰Fìjh€ fÿ4j FêPšòM2Àt¸ ëkfÿvğè‰Fô‰Vöfƒ~ø t/ÇFê f‹Føf‰Fìjh€ fÿ4j FêPšò\.ÀuÁfÿvğèßë‹Fô‹Vö‰Fü‰VşÄ^&‰&‰W‹Ğ‹NôVö&‰&‰W3À^ÉÊ È
+  V‹F‹Vƒú uHtHtVH„’ ¸ éÏ ‹vfÇFö  ÇFú  f‹F
+f‰Füjh fÿ4j FöPšò 3Àt¸ é™ ƒ¼¢ „ Vfÿv
+èéé‚ ‹vfÇFö  ÇFú  f‹F
+f‰Füjh fÿ4j FöPšòa3Àuµ9„¢tLVfÿv
+è)ëA‹vfÇFö  ÇFú  f‹F
+f‰Füjh fÿ4j FöPšò¿3À…rÿ9„¢t	Vfÿv
+èP3À^ÉÊ
+ È
+  ‹F‹Vƒú u	HtHt5Ht<¸ ëlfÇFö  ÇFú  jh€ ‹^fÿ7j FöPšòö3Àt7¸ ë?fÇFö  ëfÇFö  ÇFú  jh€ ‹^fÿ7j FöPšòV4ÀuÉf‹FüÄ^
+f&‰3ÀÉÊ
+ È  V‹v
+fÇFüÀ  öD
+8tfÇFüü?  öD
+ tNüÀÇFò f‹Füf‰Fôjh€ fÿ4j FòPšòÙ0+ÒĞt¸ ë?fÿvèM	Fø	Vújh fÿ4j FòPšòğ4ÀuÕ9„¢tVfÿvøè¢RPjè*3À^ÉÊ È  V‹v
+fÇFüÀ  öD
+8tfÇFüü?  öD
+ tNüÀÇFò f‹Füf‰Fôjh€ fÿ4j FòPšò'5+ÒĞt¸ ëIfÿvè³ ÷Ğ÷Ò#Fü#Vş!Fø!Vújh fÿ4j FòPšò”5ÀuË9„¢tVfÿvøèş RPj è†3À^ÉÊ È  V‹v
+fÇFüÀ  öD
+8tfÇFüü?  öD
+ tNüÀÇFò f‹Füf‰Fôjh€ fÿ4j FòPšòò5Àt¸ ëfÿvøè“ Ä^&‰&‰W3À^ÉÊ È  WV‹F‹È‹Ğ‹Ø%À â Áêá 0Áé
+ÑĞÁê+É‹Ã% ‹ò+Ò±‰^úšb6ğ‹úŠfû% Àğ‹F% +ÉøŠFú% +Ò±šb.6ŠNúƒáÁŠNúƒá0Á±šbS6Æ×^_ÉÊ È  WV‹F±‹Ğ% ‹Ú+Ò‹óšb6‹ÎƒáÁ±‹Şã Áë‹Î±‹ø‹Æ%À Àè‰Fú‹Ç‹ûšb6‹Îƒá0Á±šbÕ2FúÇ‹Îá Áé
+Á‰Fü‰Vş‹Æ% 0Áè‹Îá ÀÁ‹Nƒá‹ÑFüVş^_ÉÊ È  WV‹~‹…š‹•œ‹ğ‰VşöF0tÂ&kœx0$f&Ç€ğ(    ëFş&kœx0$f&Ç€ğ(   W&‹„x0 j PèöFtFş&kœx0$f&Ç€Ì(    ëFş&kœx0$f&Ç€Ì(   W&‹„x0@@j PèPöFtFş&kœx0$f&Ç€)    ëFş&kœx0$f&Ç€)   W&‹„x0 j PèöE
+8„´ öF	tFş&kœx0$f&Ç€„(    ëFş&kœx0$f&Ç€„(   Wj &ÿ´x0èĞöFÀtFş&kœx0$f&Ç€¨(    ëFş&kœx0$f&Ç€¨(   W&‹„x0@j Pè”öF	tFş&kœx0$f&Ç€\)    ëFş&kœx0$f&Ç€\)   W&‹„x0 j PèVöE
+ t|öF	ÀtFş&kœx0$f&Ç€ì)    ëFş&kœx0$f&Ç€ì)   W&‹„x0
+ j PèöF	0tFş&kœx0$f&Ç€8)    ëFş&kœx0$f&Ç€8)   W&‹„x0 j PèÔ
+^_ÉÊ È  WV‹~
+Äš‹óŒFş‹Ç&k¿|0$f‹Nf&‰‰„(Pj &ÿ·|0‹øèœ
+Fş&kœ|0$f‹Ff&‰€¨(W&‹„|0@j Pè{
+^_ÉÊ È
+  WV‹~‹…š‹•œ‹ğ‰Vúf‹FfFf‰Fü¨t%Fú&kœp0$f&Ç€(   &kœp0$f&Ç€´(   ë"Fú&kœp0$f+Àf&‰€(&kœp0$&‰€¶(&‰€´(öFü0t"&kœp0$f&Ç€Œ(   &kœp0$f&Ç€°(   ë&kœp0$f+Àf&‰€Œ(&kœp0$&‰€(&‰€Œ(öFüt"&kœp0$f&Ç€ˆ(   &kœp0$f&Ç€¬(   ë&kœp0$f+Àf&‰€ˆ(&kœp0$&‰€®(&‰€¬(öFüÀt"&kœp0$f&Ç€„(   &kœp0$f&Ç€¨(   ë&kœp0$f+Àf&‰€„(&kœp0$&‰€ª(&‰€¨(öE
+8tGöFıt"&kœp0$f&Ç€”(   &kœp0$f&Ç€¸(   ë&kœp0$f+Àf&‰€”(&kœp0$&‰€º(&‰€¸(ŠE
+$ tGöFıt"&kœp0$f&Ç€˜(   &kœp0$f&Ç€¼(   ë&kœp0$f+Àf&‰€˜(&kœp0$&‰€¾(&‰€¼(ŠE
+$ tGöFıÀt"&kœp0$f&Ç€œ(   &kœp0$f&Ç€À(   ë&kœp0$f+Àf&‰€œ(&kœp0$&‰€Â(&‰€À(Wj j è@ÇFö  Fú&iœp0” f&ƒ¸Ú tBŒ¾'ŒFş‰vø‹ùÿvjFş&ÿ5jš:<GGÿFö‹Fö+ÒFú&iœp0” &9ÜwÓr&9€ÚwÊÿvj jèÛÇFö  Fú&iœp0” f&ƒ¸n tC„Ğ'‹øŒFş‰vø‹vöÿvjFş&ÿ5jš:HGGF+ÀÄ^ø&iŸp0” ^ø&9‡pwÕr&9·nwÌ^_ÉÊ È  V‹^‹‡š‹—œ‹ğ‰Vş‹FÀtHt;ëvFş‹F&kœ~0$&‰€„(&Ç€†(  ‹F
+&kœ~0$&‰€ˆ(&Ç€Š(  ÿvj &ÿ´~0ë9‹FFş&kœ~0$&‰€¨(&Ç€ª(  ‹F
+&kœ~0$&‰€¬(&Ç€®(  ÿv&‹„~0@j Pèã^ÉÊ È@  WV‹~‹…š‹•œ‹ğ‰Vşƒ~u<‹FÂ&kœv0$&‰€8)&Ç€:)  &kœv0$‹F
+&‰€<)&Ç€>)  W&‹„v0 j Pè†ƒ~ …® Fş&kœv0$‹F+Ò‰Fø‰Vú&‰€„(&‰†(&kœv0$‹F
+‰Fô‰Vö&‰€ˆ(&‰Š(WR&ÿ´v0è<öE
+ tfFş&kœr0$f‹Føf&‰€\)&kœr0$f‹Nôf&‰ˆ`)W&‹”r0ƒÂj RèFş&kœt0$f‹Føf&‰€\)&kœt0$f‹Fôf&‰€`)W&‹„t0 j PèĞƒ~…¨ ‹F+ÒFş&kœv0$&‰€¨(&‰ª(‹N
++Û‰Nğ‰^ò&kœv0$‰Fì‰Vî‹Vò&‰ˆ¬(&‰®(W&‹Œv0Aj Qè~Fş&kœr0$f‹Fìf&‰€„(&kœr0$f‹Nğf&‰ˆˆ(Wj &ÿ´r0èOFş&kœt0$f‹Fìf&‰€„(&kœt0$f‹Fğf&‰€ˆ(Wj &ÿ´t0è ƒ~…­ ‹F+ÒFş&kœv0$&‰€Ì(&‰Î(‹N
++Û‰Nè‰^ê&kœv0$‰Fä‰Væ‹Vê&‰ˆĞ(&‰Ò(W&‹Œv0AAj QèÍFş&kœr0$f‹Fäf&‰€¨(&kœr0$f‹Nèf&‰ˆ¬(W&‹”r0Bj RèœFş&kœt0$f‹Fäf&‰€¨(&kœt0$f‹Fèf&‰€¬(W&‹„t0@j Pèkƒ~…° ‹F+ÒFş&kœv0$&‰€ğ(&‰ò(‹N
++Û‰Nà‰^â&kœv0$‰FÜ‰VŞ‹Vâ&‰ˆô(&‰ö(W&‹Œv0ƒÁj QèFş&kœr0$f‹FÜf&‰€Ì(&kœr0$f‹Nàf&‰ˆĞ(W&‹”r0BBj RèåFş&kœt0$f‹FÜf&‰€Ì(&kœt0$f‹Fàf&‰€Ğ(W&‹„t0@@j Pè³ƒ~…² ‹F+ÒFş&kœv0$&‰€)&‰)‹N
++Û‰NØ‰^Ú&kœv0$‰FÔ‰VÖ‹VÚ&‰ˆ)&‰)W&‹Œv0ƒÁj Qè_Fş&kœr0$f‹FÔf&‰€ğ(&kœr0$f‹NØf&‰ˆô(W&‹”r0ƒÂj Rè,Fş&kœt0$f‹FÔf&‰€ğ(&kœt0$f‹FØf&‰€ô(W&‹„t0 j Pèùƒ~…² Fş&kœv0$‹F+Ò‰Fø‰Vú&‰€\)&‰^)&kœv0$‹F
+‰Fô‰Vö&‰€`)&‰b)W&‹„v0 RPè«öE
+8tfFş&kœr0$f‹Føf&‰€)&kœr0$f‹Nôf&‰ˆ)W&‹”r0ƒÂj RèrFş&kœt0$f‹Føf&‰€)&kœt0$f‹Fôf&‰€)W&‹„t0 j Pè?ƒ~…º öE
+ „² ‹F+ÒFş&kœv0$&‰€ì)&‰î)‹N
++Û‰NĞ‰^Ò&kœv0$‰FÌ‰VÎ‹VÒ&‰ˆğ)&‰ò)W&‹Œv0ƒÁ
+j QèãFş&kœr0$f‹FÌf&‰€€)&kœr0$f‹NĞf&‰ˆ„)W&‹”r0ƒÂj Rè°Fş&kœè    ƒÄØ¶EÿiÀ;  é6  è    ƒÄ‹Ø‹}Mÿ¶EÿÁàQj4‰Gÿvè    ƒÄØ¶EÿÁàé  fƒ¾ˆ   EÿPj5ÿvu6è    ƒÄ‹Ø‹}Mÿ¶EÿÁàQj4‰Gÿvè    ƒÄØ¶EÿÁàé¼   è    ƒÄ‹ØŠEÿ‹}Àè¶ÈŠ‘    ¶ÂÁàˆUÿUÿ‰GRj4ÿvè    ƒÄØŠEÿÀè¶ÈŠ‘    ¶ÂÁàˆUÿëgEÿPj5ÿvè    ƒÄ‹ØŠEÿ‹}Àè¶ÈŠ‘    ¶ÂiÀ  ˆUÿ‰GUÿRj4ÿvè    ƒÄØŠEÿÀè¶ÈŠ‘    ¶ÂiÀ  ˆUÿ%ÿÿ  	G‹Ã_^[‹å]Ã                                      U‹ìƒìSVW‹u·†„   ƒèƒøw¶ˆ    ÿ$    EÿPj7ÿvè    ƒÄ‹ØŠEÿ‹}Àè¶ÈŠ‘    ¶ÂÁàˆUÿUÿ‰GRj6ÿvè    ƒÄØŠEÿÀè¶ÈŠ‘    ¶ÂÁàˆUÿéF  EÿPj7ÿvè    ƒÄ‹ØŠEÿ‹}Àè¶ÈŠ‘    ¶ÂÁàˆUÿUÿ‰GRj6ÿvè    ƒÄØŠEÿÀè¶ÈŠ‘    ¶ÂÁàˆUÿéå  EÿPj7ÿvè    ƒÄ‹ØŠEÿ‹}Àè¶ÈŠ‘    ¶ÂiÀ  ˆUÿ‰GUÿRj6ÿvè    ƒÄØŠEÿÀè¶ÈŠ‘    éy  fƒ¾†   EÿPj7ÿvs<è    ƒÄ‹Ø‹}Mÿ¶EÿiÀ  ;Q‰Gj6ÿvè    ƒÄØ¶EÿiÀ;  é6  è    ƒÄ‹Ø‹}Mÿ¶EÿÁàQj6‰Gÿvè    ƒÄØ¶EÿÁàé  fƒ¾ˆ   EÿPj7ÿvu6è    ƒÄ‹Ø‹}Mÿ¶EÿÁàQj6‰Gÿvè    ƒÄØ¶EÿÁàé¼   è    ƒÄ‹ØŠEÿ‹}Àè¶ÈŠ‘    ¶ÂÁàˆUÿUÿ‰GRj6ÿvè    ƒÄØŠEÿÀè¶ÈŠ‘    ¶ÂÁàˆUÿëgEÿPj7ÿvè    ƒÄ‹ØŠEÿ‹}Àè¶ÈŠ‘    ¶ÂiÀ  ˆUÿ‰GUÿRj6ÿvè    ƒÄØŠEÿÀè¶ÈŠ‘    ¶ÂiÀ  ˆUÿ%ÿÿ  	G‹Ã_^[‹å]Ã                                      U‹ìƒìSVW‹u·†„   ƒèƒøw¶ˆ    ÿ$    EÿPj9ÿvè    ƒÄ‹ØŠEÿ‹}Àè¶ÈŠ‘    ¶ÂÁàˆUÿUÿ‰GRj8ÿvè    ƒÄØŠEÿÀè¶ÈŠ‘    ¶ÂÁàˆUÿé   EÿPj9ÿvè    ƒÄ‹ØŠEÿ‹}Àè¶ÈŠ‘    ¶ÂÁàˆUÿUÿ‰GRj8ÿvè    ƒÄØŠEÿÀè¶ÈŠ‘    ¶ÂÁàˆUÿéŸ  EÿPj9ÿvè    ƒÄ‹ØŠEÿ‹}Àè¶ÈŠ‘    ¶ÂiÀ  ˆUÿ‰GUÿRj8ÿvè    ƒÄØŠEÿÀè¶ÈŠ‘    é3  EÿPj9ÿvè    ƒÄ‹Ø‹}Mÿ¶EÿÁàQj8‰Gÿvè    ƒÄØ¶EÿÁàé  fƒ¾ˆ   EÿPj9ÿvu6è    ƒÄ‹Ø‹}Mÿ¶EÿÁàQj8‰Gÿvè    ƒÄØ¶EÿÁàé¼   è    ƒÄ‹ØŠEÿ‹}Àè¶ÈŠ‘    ¶ÂÁàˆUÿUÿ‰GRj8ÿvè    ƒÄØŠEÿÀè¶ÈŠ‘    ¶ÂÁàˆUÿëgEÿPj9ÿvè    ƒÄ‹ØŠEÿ‹}Àè¶ÈŠ‘    ¶ÂiÀ  ˆUÿ‰GUÿRj8ÿvè    ƒÄØŠEÿÀè¶ÈŠ‘    ¶ÂiÀ  %ÿÿ  ˆUÿ	G‹Ã_^[‹å]Ã                                      U‹ìƒìSVW3ö‹}·‡„   ƒèƒøw¶ˆ    ÿ$    EÿPj:ÿwè    ƒÄ‹ğŠEÿÀè¶ÈŠ‘    ‹]¶Â‹ÈˆUÿÁáÈÁáé  EÿPj:ÿwè    ƒÄ‹ğŠEÿÀè¶ÈŠ‘    ‹]¶Â‹ÈˆUÿÁáÈÁá‰Ké~  EÿPj:ÿwè    ƒÄ‹ğŠEÿÀè¶ÈŠ    ÀàˆEÿŠ‡Š   €eÿü<w3Àë&¹ÿ   +Ò¶ÀkÀ?÷ñ¶Mÿ…    +Ò¸ÿÿ  ÷ó¯Á‹È‹]Áá%ÿÿ  Èé]  fƒ¿ˆ   EÿPj:ÿwuRè    ƒÄ‹ğŠ‡Š   <w3Àë&¹ÿ   +Ò¶ÀkÀ÷ñ¶MÿÅ    +Ò¸ÿÿ  ÷ó¯Á‹È‹]Áá%ÿÿ  Èéø   è    ƒÄ‹ğŠEÿÀè¶ÈŠ‘    ‹]¶Â‹ÈˆUÿÁáÈÁáéÇ   EÿPj:ÿwè    ƒÄ‹ğŠEÿÀè¶ÈŠ    ÀàˆEÿŠ‡Š   €eÿü<w3Àë&¹ÿ   +Ò¶ÀkÀ?÷ñ¶Mÿ…    +Ò¸ÿÿ  ÷ó¯Á‹È‹]Áá%ÿÿ  ÈëV‹]EÿPj:ÿwè    ƒÄğŠ‡Š   <w3Àë&¹ÿ   +Ò¶ÀkÀ÷ñ¶Mÿ<Å    +Ò¸ÿÿ  ÷÷¯Á‹È%ÿÿ  ÁáÈ‹Æ_^‰K[‹å]Ã                                      U‹L$·„   ‹ìƒìƒøt&ƒøEÿPj;ÿqt:è    ¶MÿƒÄ‹ÑÁâÑÁâëREÿPj;ÿqè    ƒÄŠMÿÀé¶ÑŠŠ    ëè    ƒÄŠMÿÀé¶ÑŠŠ    ˆMÿ¶ÉiÉ  ‹ÑÁáâÿÿ  Ñ‹M‰Q‹å]ÃU‹ìƒìSVW‹u·†„   ƒèƒøw¶ˆ    ÿ$    EÿPjSÿvè    ƒÄ‹ØŠEÿ‹}Àè¶ÈŠ‘    ¶ÂÁàˆUÿUÿ‰GRjRÿvè    ƒÄØŠEÿÀè¶ÈŠ‘    ¶ÂˆUÿéf  EÿPjSÿvè    ƒÄ‹ØŠEÿ‹}Àè¶ÈŠ‘    ¶ÂÁàˆUÿUÿ‰GRjRÿvè    ƒÄØŠEÿÀè¶ÈŠ‘    ¶ÂˆUÿé  EÿPjSÿvè    ƒÄ‹ØŠEÿ‹}Àè¶ÈŠ‘    ¶ÂiÀ  ˆUÿ‰GUÿRjRÿvè    ƒÄØŠEÿÀè¶ÈŠ‘    ¶ÂiÀ  %ÿÿ  ˆUÿéŸ   fƒ¾ˆ   EÿPjSÿvt[è    ƒÄ‹ØŠEÿ‹}Àè¶ÈŠ‘    ¶ÂÁàˆUÿUÿ‰GRjRÿvè    ƒÄØŠEÿÀè¶ÈŠ‘    ¶ÂˆUÿë7EÿPjSÿvè    ƒÄ‹Ø‹}Mÿ¶EÿÁàQjR‰Gÿvè    ƒÄØ¶EÿÁà	G‹Ã_^[‹å]Ã                                      SVW3Û‹|$öGtÿw‹t$VèU   ƒÄ‹Øë‹t$öGt‹GÁèPVèS   ƒÄØöGtÿwVè[   ƒÄØöGt‹GÁèPVè_   ƒÄØ‹Ã_^[Ãf‹D$‹L$fÁèPjFÿqè    ƒÄÃf‹D$‹L$fÁèPjGÿqè    ƒÄÃf‹D$‹L$fÁèPjDÿqè    ƒÄÃf‹D$‹L$fÁèPjEÿqè    ƒÄÃU‹D$·‹ì…Ét%ƒùt+ƒùt1ƒù|ƒù~2ƒùt8ƒùt>¸   ë@Pÿuè°  ë5PÿuèØşÿÿë*Pÿuè%   ëPÿuè  ëPÿuè‰  ë	Pÿuè?  ‹å]ÃƒìSV‹t$WUVè    ƒÄ‹øjWè    ƒÄ…Àuj½    Wè    ƒÄ…Àt½   WèöÌÿÿƒÄ‹ØWè    D$ƒÄPj<ÿvè    ‹|$(ƒÄ‹G¨€töG€t€L$ë€d$û¨@töG@t€L$ë€d$ıöÄtöGt€L$ë€d$ïöÄtöGt€L$ë€d$÷öÄtöGt€L$ë€d$şÿt$j<ÿvè    D$ƒÄPjHÿvè    ƒÄöGtCG…íuö t€L$ë€d$ûëö t€N|ë€f|÷…Ûtö tjëj ÿvxè<¿ÿÿƒÄöGtCG…íuö t€L$ë€d$ıëö t€N|ë€f|û…Ûtö tjëj ÿvxèó¾ÿÿƒÄ‹OöÁ töG t€L$ë€d$ïöÁtöGt€L$ë€d$÷öÅ töG t€L$ë€d$şöÅ€töG€t€L$@ë€d$¿öÅ@töG@t€L$ ë€d$ßÿt$jHÿvè    D$ƒÄPjIÿvè    ƒÄ‹G¨töGt€L$ë€d$÷¨töGt€L$ë€d$ûÿt$jIÿvè    ƒÄ3À]_^[ƒÄÃU‹ìƒìVW}ô‹u¥¥f¥‹uÿvxè    ·MôƒÄƒùtƒùt¸   ëseö«ªşÿEôPVèh   ƒÄ‹øëY…Àt)eöWUıÿEôPVèL   ƒÄ‹øeúT EôPVè(  ë'eöWUıÿEôPVè  ƒÄ‹øeúd EôPVè   ƒÄø‹Ç_^‹å]ÃƒìSV‹t$WUjÿvxè    ‰D$D$ƒÄPj=ÿvè    ‹|$,ƒÄ‹OöÁ töG t€L$@ë€d$¿öÁtöGt€L$ ë€d$ßöÁ€töG€t€L$ë€d$ûöÁ@töG@t€L$ë€d$ıöÅtöGt€L$ë€d$ïöÅtöGt€L$ë€d$÷öÅtöGt€L$ë€d$şöÅ töG t€L$€ë€d$ÿt$j=ÿvè    D$ƒÄPjIÿvè    ƒÄöGtöGt€L$ë€d$ıÿt$jIÿvè    D$ƒÄPjJÿvè    ƒÄöGtF3Û‹oŠ\$ƒãƒåt€L$ë€d$ı…Ût-…íu)ƒ|$ t"ÿvxè    ƒÄjÿÿvxè    ƒÄë‹l$‹\$öG€töG€t€L$ë€d$÷ÿt$jJÿvè    ƒÄöGt…Ûu…ítƒ|$ tÿvxè    ƒÄ3À]_^[ƒÄÃU‹ìƒìVEÿW‹uPj>ÿvè    ƒÄ‹}‹OöÁ töG t€Mÿ@ë€eÿ¿öÁtöGt€Mÿ ë€eÿßöÁ€töG€t€Mÿë€eÿûöÁ@töG@t€Mÿë€eÿıöÅtöGt€Mÿë€eÿïöÅtöGt€Mÿë€eÿ÷öÅtöGt€Mÿë€eÿşöÅtöGt€Mÿ€ë€eÿÿuÿj>ÿvè    ƒÄEÿPjIÿvè    ƒÄöGtöGt€Mÿë€eÿşÿuÿjIÿvè    ƒÄEÿPjJÿvè    ƒÄ‹G¨töGt€Mÿë€eÿşöÄ@töG@t€Mÿë€eÿûÿuÿjJÿvè    ƒÄ3À_^‹å]ÃVW‹|$öGt‹G‹t$ÀàPj?ÿvè    ƒÄë‹t$öGt‹GÁèÀàPj@ÿvè    ƒÄöGt‹GÁèÀàPjBÿvè    ƒÄöGt‹GÀàPjAÿvè    ƒÄöGtöGtj ëjjCÿvè    ƒÄöG@töGtjëj jCÿvè    ƒÄ3À_^Ã‹D$‹Hƒù:uÇ@   Á`Pÿt$è   ƒÄë‹T$ÿpQÿrè    ƒÄÃƒìSVW3Û‹|$UWè    ƒÄ‹ğjVè    ƒÄ…Àu/jVè    ƒÄ…ÀtjVè    ƒÄ…ÀtVè    ƒÄ…Àt3íë½   VèdÅÿÿ‰D$ƒÄVè    ‹t$$ƒÄöFtÿvWè!  ƒÄ‹ØöFt‹FÁèPWè   ƒÄØöFtÿvWèã  ƒÄØöFt‹FÁèPWè´  ƒÄØöFtX…íuÿvWè…  ƒÄØë"‹€   ‹Fá  ÿÿ%ÿÿ  Á‰€   ‰‡€   ƒ|$ t‹N‹ÁÁè·É·ĞRQÿwxè‡·ÿÿƒÄöFtb…íun‹E ÁèPWèø  ƒÄØë%‹‡€   n%ÿÿ  ‹M á  ÿÿ‰‡€   È‰€   ƒ|$ t‹M ‹ÁÁè·É·ĞRQÿwxè·ÿÿƒÄöF tÿvWès  ƒÄØöFt‹FÁèPWèR  ƒÄØöF€tÿvWè5  ƒÄØöF@t‹FÁèPWè	  ƒÄØöFtÿvWè÷	  ƒÄØöFt‹FÁèPWè·
+  ƒÄØöFtÿvWè{  ƒÄØöFt‹FÁèPWè$  ƒÄØöF tÿvWèÓ  ƒÄØöFt‹FÁèPWè  ƒÄØöF€tÿvWèI  ƒÄØöF@t‹FÁèPWèñ  ƒÄØ‹Ã]_^[ƒÄÃU‹L$·„   ‹ìƒèVƒøw¶    ÿ$•    f‹EfÁè¶ĞŠ‚    ëzf‹EfÁè¶ĞŠ‚    ëgf‹EfÁè
+¶ĞŠ‚    ëTfƒ¹†   sf¾$f‹Ef+Òf÷ö$øë8ŠEë3fƒ¹ˆ   uŠEë$f‹EfÁè¶ĞŠ‚    ëf‹EfÁè
+¶ĞŠ‚    Pj0ÿqè    ƒÄ^]Ã                                      U‹L$·„   ‹ìƒèVƒøw¶    ÿ$•    f‹EfÁè¶ĞŠ‚    ëzf‹EfÁè¶ĞŠ‚    ëgf‹EfÁè
+¶ĞŠ‚    ëTfƒ¹†   sf¾$f‹Ef+Òf÷ö$øë8ŠEë3fƒ¹ˆ   uŠEë$f‹EfÁè¶ĞŠ‚    ëf‹EfÁè
+¶ĞŠ‚    Pj1ÿqè    ƒÄ^]Ã                                      U‹L$·„   ‹ìƒèVƒøw¶    ÿ$•    f‹EfÁè¶ĞŠ‚    ëlf‹EfÁè¶ĞŠ‚    ëYŠEëTfƒ¹†   sf¾$f‹Ef+Òf÷ö$øë8ŠEë3fƒ¹ˆ   uŠEë$f‹EfÁè¶ĞŠ‚    ëf‹EfÁè
+¶ĞŠ‚    PjPÿqè    ƒÄ^]Ã                                      U‹L$·„   ‹ìƒèVƒøw¶    ÿ$•    f‹EfÁè¶ĞŠ‚    ëlf‹EfÁè¶ĞŠ‚    ëYŠEëTfƒ¹†   sf¾$f‹Ef+Òf÷ö$øë8ŠEë3fƒ¹ˆ   uŠEë$f‹EfÁè¶ĞŠ‚    ëf‹EfÁè
+¶ĞŠ‚    PjQÿqè    ƒÄ^]Ã                                      U‹L$·„   ‹ìƒèƒøw¶    ÿ$•    f‹EfÁè¶ĞŠ‚    ë^f‹EfÁè¶ĞŠ‚    ëKf‹EfÁè
+¶ĞŠ‚    ë8ŠEë3fƒ¹ˆ   uŠEë$f‹EfÁè¶ĞŠ‚    ëf‹EfÁè
+¶ĞŠ‚    Pj2ÿqè    ‹å]Ã                                      U‹L$·„   ‹ìƒèƒøw¶    ÿ$•    f‹EfÁè¶ĞŠ‚    ë^f‹EfÁè¶ĞŠ‚    ëKf‹EfÁè
+¶ĞŠ‚    ë8ŠEë3fƒ¹ˆ   uŠEë$f‹EfÁè¶ĞŠ‚    ëf‹EfÁè
+¶ĞŠ‚    Pj3ÿqè    ‹å]Ã                                      U‹L$·„   ‹ìƒèVƒøw¶    ÿ$•    f‹EfÁè¶ĞŠ‚    ëzf‹EfÁè¶ĞŠ‚    ëgf‹EfÁè
+¶ĞŠ‚    ëTfƒ¹†   sf¾;f‹Ef+Òf÷ö$øë8ŠEë3fƒ¹ˆ   uŠEë$f‹EfÁè¶ĞŠ‚    ëf‹EfÁè
+¶ĞŠ‚    Pj4ÿqè    ƒÄ^]Ã                                      U‹L$·„   ‹ìƒèVƒøw¶    ÿ$•    f‹EfÁè¶ĞŠ‚    ëzf‹EfÁè¶ĞŠ‚    ëgf‹EfÁè
+¶ĞŠ‚    ëTfƒ¹†   sf¾;f‹Ef+Òf÷ö$øë8ŠEë3fƒ¹ˆ   uŠEë$f‹EfÁè¶ĞŠ‚    ëf‹EfÁè
+¶ĞŠ‚    Pj5ÿqè    ƒÄ^]Ã                                      U‹L$·„   ‹ìƒèVƒøw¶    ÿ$•    f‹EfÁè¶ĞŠ‚    ëzf‹EfÁè¶ĞŠ‚    ëgf‹EfÁè
+¶ĞŠ‚    ëTfƒ¹†   sf¾;f‹Ef+Òf÷ö$øë8ŠEë3fƒ¹ˆ   uŠEë$f‹EfÁè¶ĞŠ‚    ëf‹EfÁè
+¶ĞŠ‚    Pj6ÿqè    ƒÄ^]Ã                                      U‹L$·„   ‹ìƒèVƒøw¶    ÿ$•    f‹EfÁè¶ĞŠ‚    ëzf‹EfÁè¶ĞŠ‚    ëgf‹EfÁè
+¶ĞŠ‚    ëTfƒ¹†   sf¾;f‹Ef+Òf÷ö$øë8ŠEë3fƒ¹ˆ   uŠEë$f‹EfÁè¶ĞŠ‚    ëf‹EfÁè
+¶ĞŠ‚    Pj7ÿqè    ƒÄ^]Ã                                      U‹L$·„   ‹ìƒèƒøw¶    ÿ$•    f‹EfÁè¶ĞŠ‚    ë^f‹EfÁè¶ĞŠ‚    ëKf‹EfÁè
+¶ĞŠ‚    ë8ŠEë3fƒ¹ˆ   uŠEë$f‹EfÁè¶ĞŠ‚    ëf‹EfÁè
+¶ĞŠ‚    Pj8ÿqè    ‹å]Ã                                      U‹L$·„   ‹ìƒèƒøw¶    ÿ$•    f‹EfÁè¶ĞŠ‚    ë^f‹EfÁè¶ĞŠ‚    ëKf‹EfÁè
+¶ĞŠ‚    ë8ŠEë3fƒ¹ˆ   uŠEë$f‹EfÁè¶ĞŠ‚    ëf‹EfÁè
+¶ĞŠ‚    Pj9ÿqè    ‹å]Ã                                      U‹L$·„   ‹ìƒèVƒøw¶    ÿ$•    f‹EfÁè¶ĞŠ‚    éA  f‹EfÁè¶ĞŠ‚    é+  ŠŠ   <w2Àë+¾ÿ   +Ò¶ÀkÀ?÷ö+Ò4…    ¸ÿÿ  ÷ö‹ğ+Ò·E÷ö$üÀè¶ĞŠ‚    éá   ŠŠ   <w2ÀéĞ   ¾ÿ   +Ò¶ÀkÀ÷ö+Ò4Å    ¸ÿÿ  ÷ö‹ğ+Ò·E÷ö$øé    fƒ¹ˆ   u>ŠŠ   <w2Àé…   ¾ÿ   +Ò¶ÀkÀ÷ö+Ò4Å    ¸ÿÿ  ÷ö‹ğ+Ò·E÷ö$øëXf‹EfÁè¶ĞŠ‚    ëEŠŠ   <w2Àë+¾ÿ   +Ò¶ÀkÀ?÷ö+Ò4…    ¸ÿÿ  ÷ö‹ğ+Ò·E÷ö$üÀè¶ĞŠ‚    Pj:ÿqè    ƒÄ^]Ã                                      U‹L$·„   ‹ìƒèVƒøw¶    ÿ$•    f‹EfÁè¶ĞŠ‚    éA  f‹EfÁè¶ĞŠ‚    é+  ŠŠ   <w2Àë+¾ÿ   +Ò¶ÀkÀ?÷ö+Ò4…    ¸ÿÿ  ÷ö‹ğ+Ò·E÷ö$üÀè¶ĞŠ‚    éá   ŠŠ   <w2ÀéĞ   ¾ÿ   +Ò¶ÀkÀ÷ö+Ò4Å    ¸ÿÿ  ÷ö‹ğ+Ò·E÷ö$øé    fƒ¹ˆ   u>ŠŠ   <w2Àé…   ¾ÿ   +Ò¶ÀkÀ÷ö+Ò4Å    ¸ÿÿ  ÷ö‹ğ+Ò·E÷ö$øëXf‹EfÁè¶ĞŠ‚    ëEŠŠ   <w2Àë+¾ÿ   +Ò¶ÀkÀ?÷ö+Ò4…    ¸ÿÿ  ÷ö‹ğ+Ò·E÷ö$üÀè¶ĞŠ‚    Pj:ÿqè    ƒÄ^]Ã                                      ‹L$·„   ƒøtƒøf‹D$tfÁèë!f‹D$fÁè
+¶ĞŠ‚    ëfÁè
+¶ĞŠ‚    Pj;ÿqè    ƒÄÃ‹L$·„   ƒøtƒøf‹D$tfÁèë!f‹D$fÁè
+¶ĞŠ‚    ëfÁè
+¶ĞŠ‚    Pj;ÿqè    ƒÄÃU‹L$·„   ‹ìƒèƒøw¶    ÿ$•    f‹EfÁè¶ĞŠ‚    ëFf‹EfÁè¶ĞŠ‚    ë3f‹EfÁè
+¶ĞŠ‚    ë fƒ¹ˆ   tf‹EfÁè¶ĞŠ‚    ëŠEPjRÿqè    ‹å]Ã                                      U‹L$·„   ‹ìƒèƒøw¶    ÿ$•    f‹EfÁè¶ĞŠ‚    ëFf‹EfÁè¶ĞŠ‚    ë3f‹EfÁè
+¶ĞŠ‚    ë fƒ¹ˆ   tf‹EfÁè¶ĞŠ‚    ëŠEPjSÿqè    ‹å]Ã                                      U‹ìƒìVEşW‹uP‹}fÇF ÿwè    ·ƒÄƒøwÿ$…    ¸   é;  fÇF–·EşfÇF(  Pÿwxè    éÿ   fÇF—·EşfÇF(@ Pÿwxè    éá   fÇF‘·EşfÇF( Pÿwxè    éÃ   fÇF’·EşfÇF( Pÿwxè    é¥   fÇF“·EşfÇF( Pÿwxè    ƒÄNPh    Qè˜ÿÿÇF*   ƒÄé‡   fÇF”·EşfÇF( Pÿwxè    ëPfÇF•·EşfÇF( Pÿwxè    ƒÄNPh    QèÈ—ÿÿÇF*   ƒÄë5fÇFš·EşfÇF(€ Pÿwxè    ƒÄNPh    Qè‘—ÿÿÇF*   ƒÄ3À_^‹å]Ã                                ƒì3ÀVW‹t$L$
+f‰F‰F(‹|$QÇF,   fÇF ÿwfÇF™è    ·D$ƒÄƒÆPÿwxè    ƒÄPh    Vè—ÿÿƒÄ3À_^ƒÄÃÌÌÍ Q€ ÌÌÍ { ÌÌÍ t ÌÌÍ O€ ÌÌÍ D€3 ÌÌSÍ   ‹Ã[ÃÌZ‹Î^XÍ Ÿ  ‹ñÿâÌZ‹Î^Í   ‹ñõÉ#ÁÿâÌZXYVÍ ›  ‹Æ^õÉ#ÁÿâZ‹Î^XÍ ¤  ‹ñÿâÌZ‹Î^Í £  ‹ñÿâÌÌZ‹Î^Í œ  ‹ñÿâÌÌZ‹Î^XÍ ¢  ‹ñÿâÌZ‹Î^XÍ ¡  ‹ñÀ@ÿâÌÌYXZS‹ØÍ  ' Ò#Â[ÿáÌ‹D$‹T$Í  ' r‹L$‰‹L$‰3ÀÂ ÌÌÌÍ €3 ÌÌÍ €3                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           Software\Creative Tech\DriverDefaults\sb16.vxd\%s   Software\Creative Tech\DriverDefaults\sb16.vxd  ISAPNP  0123456789ABCDEF                                                                                                                        SB16.VXD    %s [%03x]       dsound.vxd  naapi.vxd   SOFTWARE\Creative Tech\DriverDefaults\sb16.vxd\ MicInMaxVol                                                                                                                                                             U‹ìVj fÿuÍ §  ƒÄÀt‹u‰¸    øëù¸   ^ÉÃVECreative Audio VxD  	VSB16_DDB  ÿ ÿ 0 Ğ  Ğ4 VS_VERSION_INFO ½ïş   &     &     ?             ¥2          c  StringFileInfo  O  040904E4    *  CompanyName Creative Technology Ltd.    )  FileDescription Creative Audio Vxd        FileVersion 4.38.16      
+ InternalName    sb16.vxd    G 3 LegalCopyright  Copyright (C) Creative Technology Ltd. 1994-1998    " 
+ OriginalFilename    sb16.vxd       ProductName Creative Audio    ProductVersion  4.38.16     $   VarFileInfo   Translation 	ä            À         À       –  À         À         À         À         À       ‘  À       ’  À       “  À             x   
+                                                                                                                                                                                                                                                                                                                                   l¯  ÿÿÿÿğ³  m        ÿÿÿÿl¯  ÿÿÿÿ´  n      N  ÿÿÿÿl¯  ÿÿÿÿ(´  o      R  ÿÿÿÿl¯  ÿÿÿÿD´  p        ÿÿÿÿl¯  ÿÿÿÿ`´  q      c  ÿÿÿÿl¯  ÿÿÿÿ|´  r      G  ÿÿÿÿl¯  ÿÿÿÿ˜´  s        ÿÿÿÿl¯  ÿÿÿÿ´´  t      $  ÿÿÿÿl¯  ÿÿÿÿĞ´  u      ‰  ÿÿÿÿl¯  ÿÿÿÿì´  v      Y  ÿÿÿÿl¯  ÿÿÿÿµ  w      %  ÿÿÿÿl¯  ÿÿÿÿÿÿÿÿx        ÿÿÿÿ  ÿÿÿÿ@µ  y      á   ÿÿÿÿ  ÿÿÿÿ\µ  z      Ê   ÿÿÿÿ  ÿÿÿÿ°µ  {      8   ÿÿÿÿDË Àñ  3 §      æ  ÿÿÿÿ¬   ÿÿÿÿ8·  ı !     J  ÿÿÿÿ  ÿÿÿÿÌµ  ~      a  ÿÿÿÿ  ÿÿÿÿèµ        é  ÿÿÿÿ  ÿÿÿÿ¶  €      ^  ÿÿÿÿ  ÿÿÿÿ ¶        ü  ÿÿÿÿ  ÿÿÿÿ<¶  ‚      ¸  ÿÿÿÿ  ÿÿÿÿX¶  ƒ      {  ÿÿÿÿ  ÿÿÿÿt¶  „      Â  ÿÿÿÿ  ÿÿÿÿ¶  …      Å  ÿÿÿÿ  ÿÿÿÿ¬¶  †      à  ÿÿÿÿ  ÿÿÿÿÈ¶  ‡      Ò  ÿÿÿÿ  ÿÿÿÿä¶  ˆ      T  ÿÿÿÿ  ÿÿÿÿ|»  ‰      š  ÿÿÿÿ˜+  ÿÿÿÿ·  Š      ë   ÿÿÿÿ˜+  ÿÿÿÿ”< ‹      *  ÿÿÿÿ¬   T·  Œ·  Œ      p  ÿÿÿÿ8·  ÿÿÿÿÿÿÿÿ        ÿÿÿÿØ
+  ÿÿÿÿ¨       õ   ÿÿÿÿ¬   ÿÿÿÿ˜ä          ÿÿÿÿ<   T @å ì 5     û  ÿÿÿÿ€  ÿÿÿÿÿÿÿÿ‘      B  ÿÿÿÿd  ÿÿÿÿü·  ’      û  ÿÿÿÿd  ÿÿÿÿÿÿÿÿ“      û  ÿÿÿÿ  ÿÿÿÿÿÿÿÿ”      û  ÿÿÿÿ(  ÿÿÿÿÿÿÿÿ•      ò  ÿÿÿÿ˜Ë  ÿÿÿÿ°õ i 	     Á   ÿÿÿÿŒ  ¤¸  ÿÿÿÿ—      ˜  ÿÿÿÿ„
+  ÿÿÿÿÿÿÿÿ˜        ÿÿÿÿl¸  À¸  ÿÿÿÿ™      p  ÿÿÿÿ¤¸  Ü¸  ÿÿÿÿš      ‚  ÿÿÿÿÀ¸  ÿÿÿÿÿÿÿÿ›      Æ   ÿÿÿÿ0  ÿÿÿÿ¬& ²      "  ÿÿÿÿ”ì  ÿÿÿÿ<& [      ÿ  ÿÿÿÿÄ@ ÿÿÿÿÿÿÿÿ§      q   ÿÿÿÿhé  \ì  ÿÿÿÿ       	  ÿÿÿÿ(ë  dÊ {       À   ÿÿÿÿ¨  ÿÿÿÿ€Ê ¡      ˜  ÿÿÿÿğ*  ÿÿÿÿŒw º 4     ˜  ÿÿÿÿ3 ÿÿÿÿ — ¶        ÿÿÿÿ à  ÿÿÿÿÿÿÿÿm      ¶  ÿÿÿÿ    º  w ¥      Á   ÿÿÿÿô¹  ,º  ÿÿÿÿ¦        ÿÿÿÿº  Hº  \õ  §      q  ÿÿÿÿ,º  ÿÿÿÿD»  ¨      ä  ÿÿÿÿ  ÿÿÿÿÿÿÿÿN       %  ÿÿÿÿ4  ÿÿÿÿü' ~ 	    €   ÈÍ ˆ  ÿÿÿÿˆÏ ÿÿÿÿ    Ü   ÿÿÿÿL	 X& ÿÿÿÿV       È   ÿÿÿÿ¸s ğº  Àÿ O B     N  ÿÿÿÿÔº  ÿÿÿÿÿÿÿÿP B     q   ÿÿÿÿ°5 ¸Ê ÿÿÿÿ£      q   ÿÿÿÿÌì  ! ÿÿÿÿB      Š  ÿÿÿÿ,º  ÿÿÿÿÿÿÿÿ_       K  ÿÿÿÿğó  ÿÿÿÿÿÿÿÿæ 8     [  ÿÿÿÿ  ÿÿÿÿ˜»  ³      n  ÿÿÿÿ  ÿÿÿÿ´»  ´      ˆ   ÿÿÿÿ  ÿÿÿÿà0 µ      o  ÿÿÿÿt  ì»  $¼  ¶      2   ÿÿÿÿĞ»  ÿÿÿÿ¼  ·      3   ÿÿÿÿĞ»  ÿÿÿÿÿÿÿÿ¸      Å  ÿÿÿÿt  ÿÿÿÿ@¼  ¹      §  ÿÿÿÿt  ÿÿÿÿ\¼  º      .  ÿÿÿÿt  ÿÿÿÿx¼  »      .  ÿÿÿÿt  ÿÿÿÿ”¼  ¼      /  ÿÿÿÿt  °¼  è¼  ½      0   ÿÿÿÿ”¼  ÿÿÿÿÌ¼  ¾      1   ÿÿÿÿ”¼  ÿÿÿÿÿÿÿÿ¿      é  ÿÿÿÿt  ÿÿÿÿ½  À      6  ÿÿÿÿt   ½  è% Á      ò  ÿÿÿÿ½  ÿÿÿÿÿÿÿÿÂ      İ  ÿÿÿÿd  X½  ÜÁ  Ã        ÿÿÿÿ<½  ÿÿÿÿt½  Ä      ‡  ÿÿÿÿ<½  ÿÿÿÿ½  Å      Å  ÿÿÿÿ<½  ÿÿÿÿÿÿÿÿÆ      Ô  ÿÿÿÿX   È½  À  Ç      r  ÿÿÿÿ¬½  ä½  í  È        ÿÿÿÿÈ½   ¾  ÿÿÿÿÉ      ×  ÿÿÿÿä½  ÿÿÿÿÿÿÿÿÊ      Æ  ÿÿÿÿX   ˜4 Äç T       g  ÿÿÿÿœ# ÿÿÿÿ† ª ?     ÿ  ÿÿÿÿ8g ÿÿÿÿÿÿÿÿÕ      2  ÿÿÿÿ˜4 pg ˆ1 Ì      è  ÿÿÿÿìD ÿÿÿÿÿÿÿÿÓ .     £  ÿÿÿÿÄ ÿÿÿÿÿÿÿÿ 	     ı   ÿÿÿÿ<   à¾   0 Ğ      Œ  ÿÿÿÿÄ¾  ÿÿÿÿÿÿÿÿÑ      .  ÿÿÿÿ¾  ÿÿÿÿÀ¿  Ö        ÿÿÿÿ4¿  l¿  ÿÿÿÿÙ      r  ÿÿÿÿ¾  ¿  P¿  Ø      o  ÿÿÿÿ¾  ÿÿÿÿÿÿÿÿó      /  ÿÿÿÿ¿  ˆ¿  ¤¿  Ú      0   ÿÿÿÿl¿  ÿÿÿÿÿÿÿÿï      ×  ÿÿÿÿ¿  ÿÿÿÿÿÿÿÿñ      é  ÿÿÿÿ¾  ÿÿÿÿ4¿  ×               Shell.Application.1	       RegBackupesktop BandsArV   s % V         ProxyStubClsid32         & {00020420-0000-0000-C000-000000000046}c   t % c         TypeLib         & {EAB22AC0-30C1-11CF-A7EB-0000C05BAE0B}         Version1.1S   u % S   &      {9BA05970-F6A8-11CF-A442-00A0C90A8F39}          IFolderViewOCT   v % T         ProxyStubClsid         & {00020424-0000-0000-C000-000000000046}V   w % V         ProxyStubClsid32         & {00020424-0000-0000-C000-000000000046}c   x % c         TypeLib         & {EAB22AC0-30C1-11CF-A7EB-0000C05BAE0B}         Version1.1\   y % \   &      {62112AA2-EBE4-11CF-A5FB-0020AFE7292D}          DShellFolderViewEventsT   z % T         ProxyStubClsid         & {00020420-0000-0000-C000-000000000046}V   { % V         ProxyStubClsid32         & {00020420-0000-0000-C000-000000000046}c   | % c         TypeLib         & {EAB22AC0-30C1-11CF-A7EB-0000C05BAE0B}         Version1.1Y   } % Y   &      {FE4106E0-399A-11D0-A48C-00A0C90A8F39}          DShellWindowsEventsT   ~ % T         ProxyStubClsid         & {00020420-0000-0000-C000-000000000046}V    % V         ProxyStubClsid32         & {00020420-0000-0000-C000-000000000046}c   € % c         TypeLib         & {EAB22AC0-30C1-11CF-A7EB-0000C05BAE0B}         Version1.1S    % S   &      {85CB6900-4D95-11CF-960C-0080C7F4EE85}          IShellWindowsT   ‚ % T         ProxyStubClsid         & {00020424-0000-0000-C000-000000000046}V   ƒ % V         ProxyStubClsid32         & {00020424-0000-0000-C000-000000000046}c   „ % c         TypeLib         & {EAB22AC0-30C1-11CF-A7EB-0000C05BAE0B}         Version1.1T   … % T   &      {88A05C00-F000-11CE-8350-444553540000}          IShellLinkDualT   † % T         ProxyStubClsid         & {00020424-0000-0000-C000-000000000046}V   ‡ % V         ProxyStubClsid32         & {00020424-0000-0000-C000-000000000046}c   ˆ % c         TypeLib         & {EAB22AC0-30C1-11CF-A7EB-0000C05BAE0B}         Version1.1T   ‰ % T   &      {08EC3E00-50B0-11CF-960C-0080C7F4EE85}          FolderItemVerbT   Š % T         ProxyStubClsid         & {00020424-0000-0000-C000-000000000046}V   ‹ % V         ProxyStubClsid32         & {00020424-0000-0000-C000-000000000046}c   Œ % c         TypeLib         & {EAB22AC0-30C1-11CF-A7EB-0000C05BAE0B}         Version1.1U    % U   &      {1F8352C0-50B0-11CF-960C-0080C7F4EE85}          FolderItemVerbsT    % T         ProxyStubClsid         & {00020424-0000-0000-C000-000000000046}V    % V         ProxyStubClsid32         & {00020424-0000-0000-C000-000000000046}c    % c         TypeLib         & {EAB22AC0-30C1-11CF-A7EB-0000C05BAE0B}         Version1.1L   ‘ % L   &      {BBCBDE60-C3FF-11CE-8350-444553540000}          FolderT   ’ % T         ProxyStubClsid         & {00020424-0000-0000-C000-000000000046}V   “ % V         ProxyStubClsid32         & {00020424-0000-0000-C000-000000000046}c   ” % c         TypeLib         & {EAB22AC0-30C1-11CF-A7EB-0000C05BAE0B}         Version1.1Q   • % Q   &      {744129E0-CBE5-11CE-8350-444553540000}          FolderItemsT   – % T         ProxyStubClsid         & {00020424-0000-0000-C000-000000000046}V   — % V         ProxyStubClsid32         & {00020424-0000-0000-C000-000000000046}c   ˜ % c         TypeLib         & {EAB22AC0-30C1-11CF-A7EB-0000C05BAE0B}         Version1.1P   ™ % P   &      {FAC32C80-CBE4-11CE-8350-444553540000}         
+ FolderItemT   š % T         ProxyStubClsid         & {00020424-0000-0000-C000-000000000046}V   › % V         ProxyStubClsid32         & {00020424-0000-0000-C000-000000000046}c   œ % c         TypeLib         & {EAB22AC0-30C1-11CF-A7EB-0000C05BAE0B}         Version1.1Z    % Z   &      {E7A1AF80-4D96-11CF-960C-0080C7F4EE85}          IShellFolderViewDualT    % T         ProxyStubClsid         & {00020424-0000-0000-C000-000000000046}p   Ÿ % V         ProxyStubClsid32         & {00020424-0000-0000-C000-000000000046}                          c     % c         TypeLib         & {EAB22AC0-30C1-11CF-A7EB-0000C05BAE0B}         Version1.1T   ¡ % T   &      {D8F015C0-C278-11CE-A49E-444553540000}          IShellDispatchT   ¢ % T         ProxyStubClsid         & {00020424-0000-0000-C000-000000000046}V   £ % V         ProxyStubClsid32         & {00020424-0000-0000-C000-000000000046}c   ¤ % c         TypeLib         & {EAB22AC0-30C1-11CF-A7EB-0000C05BAE0B}         Version1.1T   ¥ % T   &      {729FE2F8-1EA8-11D1-8F85-00C04FC2FBE1}          IShellUIHelperT   ¦ % T         ProxyStubClsid         & {00020424-0000-0000-C000-000000000046}V   § % V         ProxyStubClsid32         & {00020424-0000-0000-C000-000000000046}c   ¨ % c         TypeLib         & {EAB22AC0-30C1-11CF-A7EB-0000C05BAE0B}         Version1.1U   ® % M         TypeLib         & {EAB22AC0-30C1-11CF-A7EB-0000C05BAE0B}        u   ª % u   &      {00021494-0000-0000-C000-000000000046}        , 400Internet Explorer Browser Communication Bandl   ¬ % l         InProcServer32          D:\WIN95\SYSTEM\SHDOCVW.DLL        	 ThreadingModelApartment*   ¯ % *         Version          1.1I   ° % I         VersionIndependentProgID          Shell.ApplicationI   ± % I         Shell.Application          Shell Automation ServiceK   ² % K         CLSID         & {13709620-C279-11CE-A49E-444553540000}9   ³ % 9         CurVer          Shell.Application.1K   ´ % K         Shell.Application.1          Shell Automation ServiceK   µ % K         CLSID         & {13709620-C279-11CE-A49E-444553540000}b   ¶ % b   &      {62112AA1-EBE4-11cf-A5FB-0020AFE7292D}          Shell Automation Folder Viewl   · % l         InProcServer32          D:\WIN95\SYSTEM\SHDOCVW.DLL        	 ThreadingModelApartmente   ¸ % e   &      {0A89A860-D7B1-11CE-8350-444553540000}          Shell Automation Inproc Servicel   ¹ % l         InProcServer32          D:\WIN95\SYSTEM\SHDOCVW.DLL        	 ThreadingModelApartmentb   º % b   &      {ffdc1a80-d527-11d0-a32c-34af06c10000}          Window List in Shell Processl   » % l         InProcServer32          D:\WIN95\SYSTEM\SHDOCVW.DLL        	 ThreadingModelApartmentG   ¼ % :   &       {00020D75-0000-0000-C000-000000000046}             9   ½ % 9         ShellFolder       
+  Attributesr   [   ¾ % [   &      {8856F961-340A-11D0-A96B-00C04FD705A2}          Microsoft Web Browser(   ¿ % '         Control            l   À % l         InProcServer32          D:\WIN95\SYSTEM\SHDOCVW.DLL        	 ThreadingModelApartment+   Á % +   
+      MiscStatus          0'   Â % '         1          1314736   Ã % 6         ProgID          Shell.Explorer.2O   Ä % O         ToolboxBitmap32           D:\WIN95\SYSTEM\SHDOCVW.DLL, 257M   Å % M         TypeLib         & {EAB22AC0-30C1-11CF-A7EB-0000C05BAE0B}*   Æ % *         Version          1.1F   Ç % F         VersionIndependentProgID          Shell.ExplorerE   È % E         Shell.Explorer.2          Microsoft Web Browser:   Ë % '         Control                              K   É % K         CLSID         & {8856F961-340A-11D0-A96B-00C04FD705A2}h   Ê % h   &      {9BA05971-F6A8-11CF-A442-00A0C90A8F39}         " Microsoft Shell Folder View Routerl   Ì % l         InProcServer32          D:\WIN95\SYSTEM\SHDOCVW.DLL        	 ThreadingModelApartment+   Í % +   
+      MiscStatus          0&   Î % &         1          174088   Ï % 8         ProgID          Shell.FolderView.1O   Ğ % O         ToolboxBitmap32           D:\WIN95\SYSTEM\SHDOCVW.DLL, 260M   Ñ % M         TypeLib         & {EAB22AC0-30C1-11CF-A7EB-0000C05BAE0B}*   Ò % *         Version          1.1H   Ó % H         VersionIndependentProgID          Shell.FolderViewR   Ô % R         Shell.FolderView         " Microsoft Shell Folder View RouterK   Õ % K         CLSID         & {9BA05971-F6A8-11CF-A442-00A0C90A8F39}8   Ö % 8         CurVer          Shell.FolderView.1T   × % T         Shell.FolderView.1         " Microsoft Shell Folder View RouterK   Ø % K         CLSID         & {9BA05971-F6A8-11CF-A442-00A0C90A8F39}(   Ù %           ShellEx             l   Ú % l   &      {000214EE-0000-0000-C000-000000000046}         & {FBF23B40-E3F0-101B-8488-00AA003E56F8}l   Û % l   &      {000214F9-0000-0000-C000-000000000046}         & {FBF23B40-E3F0-101B-8488-00AA003E56F8}l   Ü % l   &      {FBF23B80-E3F0-101B-8488-00AA003E56F8}         & {FBF23B40-E3F0-101B-8488-00AA003E56F8}l   İ % l   &      {CABB0DA0-DA57-11CF-9974-0020AFD79762}         & {FBF23B40-E3F0-101B-8488-00AA003E56F8}l   Ş % l   &      {00021500-0000-0000-C000-000000000046}         & {FBF23B40-E3F0-101B-8488-00AA003E56F8}(   ß %           ShellEx             l   à % l   &      {00021500-0000-0000-C000-000000000046}         & {83799FE0-1F5A-11d1-95C7-00609797EA4F}(   á %           ShellEx             l   â % l   &      {00021500-0000-0000-C000-000000000046}         & {83799FE0-1F5A-11d1-95C7-00609797EA4F}(   ã %           ShellEx             l   ä % l   &      {00021500-0000-0000-C000-000000000046}         & {83799FE0-1F5A-11d1-95C7-00609797EA4F}(   å %           ShellEx             l   æ % l   &      {00021500-0000-0000-C000-000000000046}         & {83799FE0-1F5A-11d1-95C7-00609797EA4F}(   ç %           ShellEx             l   è % l   &      {00021500-0000-0000-C000-000000000046}         & {83799FE0-1F5A-11d1-95C7-00609797EA4F}(   é %           ShellEx             l   ê % l   &      {00021500-0000-0000-C000-000000000046}         & {83799FE0-1F5A-11d1-95C7-00609797EA4F}]   ë % ]   &      {83799FE0-1F5A-11d1-95C7-00609797EA4F}          DocFile InfoTip Handlerl   ì % l         InprocServer32          D:\WIN95\SYSTEM\SHDOCVW.DLL        	 ThreadingModelApartmentU   í % U         CSSfile          HyperText Style Sheet       	  EditFlags   I   î % I         DefaultIcon          D:\WIN95\SYSTEM\shell32.dll,58#   ï %           P3             ?   ğ % ?         Write         Registration.microsoft.com?   ñ % ?         AutoComplete         Use AutoCompleteyesB   ò % B         BrowseNewProcess         BrowseNewProcessNO6   ó % 6   
+      SmallIcons       
+  SmallIconsNO   ô %          UrlTemplate        
+ 1www.%s.com        
+ 2www.%s.edu        
+ 3www.%s.org         4%s.com         5%s.edu         6%s.org(   õ %           Streams               ö %         Desktop        ¶Default Taskbar             °â+ØdWĞ©n ÀO×¢!  
+             L        À      Fƒ      €ˆ¾—Pƒ¼ ˜•ºÇ‚¼ (”˜Pƒ¼                        àOĞ ê:i¢Ø +00 #C:\                 1İ 1     !×¢€Winnt    1     ! £ Profiles PROFILES  1     R!L‡ ie400.000  ( 1     R!M‡ Application Data APPLIC~1 ! 1     Å"‘ Microsoft MICROS~1 ) 1     Ó"2¦ Internet Explorer INTERN~1 $ 1     Û"vº Quick Launch QUICKL~1   ±            5   @   d         äe9   IE_400_C C:\WINNT\  $                \\IE_400\ADMIN$ Profiles\ie400.000\Application Data\Microsoft\Internet Explorer\Quick Launch          £       i   à                               ªO(hHjĞŒx ÀOÙ´"  à                                     Default Toolbars       c   ÷ % c   &      {AF4F6510-F982-11d0-8595-00AA004CD6D8}          Registry Tree Options Utilityl   ø % l         InProcServer32          D:\WIN95\SYSTEM\SHDOCVW.DLL        	 ThreadingModelApartment\   ù % \   &      {56FDF344-FD6D-11d0-958A-006097C9A090}          Task Bar Communicationl   ú % l         InProcServer32          D:\WIN95\SYSTEM\SHDOCVW.DLL        	 ThreadingModelApartmentb   ı % [   &      {7BA4C742-9E81-11CF-99D3-00AA004AE837}          Microsoft BrowserBandServicel   ü % l         InProcServer32          D:\WIN95\SYSTEM\SHDOCVW.DLL        	 ThreadingModelApartmentw   û % w   &      {D969A300-E7FF-11d0-A93B-00A0C90F2719}          Microsoft New Object Service         flags    l   ş % l         InProcServer32          D:\WIN95\SYSTEM\SHDOCVW.DLL        	 ThreadingModelApartmentè   r % è         IE CompList          IE40.Comctl32          IE40.Controls       
+   IE40.Assoc          IE40.Browser          IE40.OnlyBrowser          mshtml.DllReg          mshtml.Install          IE40.UserAgent»  q % »        IE40.Comctl32        ( BackupRegPathNameD:\PROGRA~1\UNINST~1\IE40~1.COM\AINF0000         BackupRegSize            F BackupFileNameD:\Program Files\Uninstall Information\IE40.Comctl32\IE40.Comctl32.DAT         BackupFileSize           
+ 4 BackupPathD:\Program Files\Uninstall Information\IE40.Comctl32         InstallINFFileD:\WIN95\TEMP\RGI370.TMP         InstallINFSectionRegDll         BackupRegistryy¼  © % ¼  
+      IE40.Assoc        ( BackupRegPathNameD:\PROGRA~1\UNINST~1\IE40~1.ASS\AINF0000         BackupRegSize `          @ BackupFileNameD:\Program Files\Uninstall Information\IE40.Assoc\IE40.Assoc.DAT         BackupFileSize           
+ 1 BackupPathD:\Program Files\Uninstall Information\IE40.Assoc         InstallINFFileD:\WIN95\TEMP\RGI394.TMP         InstallINFSectionInstallAssociations         BackupRegistryy¿  « % ¿        IE40.Browser        ( BackupRegPathNameD:\PROGRA~1\UNINST~1\IE40~1.BRO\AINF0000         BackupRegSize”         D BackupFileNameD:\Program Files\Uninstall Information\IE40.Browser\IE40.Browser.DAT         BackupFileSize           
+ 3 BackupPathD:\Program Files\Uninstall Information\IE40.Browser         InstallINFFileD:\WIN95\TEMP\RGI3A6.TMP         InstallINFSectionInstallBrowser         BackupRegistryyù  ÿÿÿÿÿÿÿÿ      IE40.Browser        ( BackupRegPathNameD:\PROGRA~1\UNINST~1\IE40~1.BRO\AINF0000         BackupRegSize”         D BackupFileNameD:\Program Files\Uninstall Information\IE40.Browser\IE40.Browser.DAT         BackupFileSize           
+ 3 BackupPathD:\Program Files\Uninstall Information\IE40.Browser         InstallINFFileD:\WIN95\TEMP\RGI3A6.TMP         InstallINFSectionInstallBrowser         BackupRegistryy;
+  ÿÿÿÿÿÿÿÿ                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           
