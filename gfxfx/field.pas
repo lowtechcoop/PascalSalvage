@@ -1,0 +1,161 @@
+
+program LinesOfForce;
+{ 'lines-of-force' from charged particles, by Bas van Gaalen, Holland, PD }
+uses
+  crt,graph;
+
+const
+  Density = 16;
+  MaxPoints = 5;
+  Step = 10;
+  StPos : array[1..Density,1..2] of shortint = (
+    (-3, 3),(-2, 4),( 0, 5),( 2, 4),( 3, 3),
+    (-4, 2),                        ( 4, 2),
+    (-5, 0),                        ( 5, 0),
+    (-4,-2),                        ( 4,-2),
+    (-3,-3),(-2,-4),( 0,-5),( 2,-4),( 3,-3));
+
+type
+  PointRec = record
+               Xpos,Ypos : integer;
+               Value : real;
+               Direction : shortint;
+             end;
+
+  PointArr = array[1..MaxPoints] of PointRec;
+
+var
+  Point : PointArr;
+  MaxX,MaxY,MidX,MidY : word;
+  NofPoints : byte;
+
+{----------------------------------------------------------------------------}
+
+procedure InitGraphics;
+
+var
+  grDriver,grMode,I,J : integer;
+
+begin
+  grDriver := detect;
+  initgraph(grDriver,grMode,'d:\tp\bgi');
+  MaxX := getmaxx; MaxY := getmaxy;
+  MidX := MaxX div 2; MidY := MaxY div 2;
+  setcolor(lightgray);
+  line(MidX,MidY-20*Step,MidX,MidY+20*Step);
+  line(MidX-20*Step,MidY,MidX+20*Step,MidY);
+
+  I := MidX-20*Step;
+  while I <= MidX+20*Step do begin line(I,MidY-1,I,MidY+1); inc(I,Step); end;
+  I := MidY-20*Step;
+  while I <= MidY+20*Step do begin line(MidX-1,I,MidX+1,I); inc(I,Step); end;
+
+  I := MidX-20*Step;
+  while I <= MidX+20*Step do begin
+    J := MidY-20*Step;
+    while J <= MidY+20*Step do begin putpixel(I,J,darkgray); inc(J,Step); end;
+    inc(I,Step);
+  end;
+
+end;
+
+{----------------------------------------------------------------------------}
+
+procedure InitPoints(var Pt : PointArr);
+
+var
+  Tmp : string[10];
+  I : byte;
+
+begin
+  randomize;
+  NofPoints := 1+random(MaxPoints);
+  for I := 1 to NofPoints do with Pt[I] do begin
+    Xpos := (random(30)-15)*Step;
+    Ypos := (random(30)-15)*Step;
+    Value := 1+random(10);
+    if random(2) = 1 then Direction := 1 else Direction := -1;
+    circle(MidX+Xpos,MidY-Ypos,4);
+    str(Direction*Value:1:2,Tmp);
+    outtextxy(MidX+Xpos-3*8,MidY-Ypos-2*8,Tmp);
+  end;
+end;
+
+{----------------------------------------------------------------------------}
+
+procedure DrawFieldLines(Pt : PointArr);
+
+var
+  I,J : word;
+
+{- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - }
+
+procedure CalcDest(Px,Py : real);
+
+var
+  EiPoint : array[1..MaxPoints] of real;
+  EpX,EpY,Range : real;
+  J : word;
+  I : byte;
+  Terminate : boolean;
+
+begin
+  moveto(MidX+round(Px),MidY-round(Py));
+  J := 1;
+  repeat
+    for I := 1 to NofPoints do begin
+      Range := sqrt(sqr(abs(Px)-abs(Pt[I].Xpos))+sqr(abs(Py)-abs(Pt[I].Ypos)));
+      if Range = 0 then EiPoint[I] := 0 else EiPoint[I] := Pt[I].Value/sqr(Range);
+    end;
+    EpX := 0; EpY := 0;
+    for I := 1 to NofPoints do begin
+      if Range = 0 then begin EpX := 0; EpY := 0; end
+      else begin
+        EpX := EpX+Pt[I].Direction*EiPoint[I]*((Px-Pt[I].Xpos)/Range);
+        EpY := EpY+Pt[I].Direction*EiPoint[I]*((Py-Pt[I].Ypos)/Range);
+      end
+    end;
+    EpX := EpX*1000; if EpX > 3 then EpX := 3 else if EpX < -3 then EpX := -3;
+    EpY := EpY*1000; if EpY > 3 then EpY := 3 else if EpY < -3 then EpY := -3;
+    lineto(MidX+round(Px+EpX),MidY-round(Py-EpY));
+    I := 1; Terminate := false;
+    repeat
+      Terminate := (abs(round(EpX)) >= abs(round(Pt[I].Xpos-Px)+1)) and
+                   (abs(round(EpY)) >= abs(round(Pt[I].Ypos-Py)+1));
+      inc(I);
+    until (I = NofPoints+1) or Terminate;
+    Px := Px+EpX; Py := Py+EpY;
+    if not Terminate then Terminate := ((MidX+Px) < (MidX-20*Step)) or
+                                       ((MidX+Px) > (MidX+20*Step)) or
+                                       ((MidY+Py) < (MidY-20*Step)) or
+                                       ((MidY+Py) > (MidY+20*Step));
+    if not Terminate then Terminate := keypressed;
+    inc(J);
+  until Terminate or (J = 500);
+end;
+
+{- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - }
+
+begin
+  setcolor(green);
+
+  for I := 1 to NofPoints do
+    if Pt[I].Direction > 0 then
+      for J := 1 to 16 do CalcDest(Pt[I].Xpos+StPos[J,1],Pt[I].Ypos+StPos[J,2]);
+
+  setcolor(lightgray);
+  outtextxy(0,0,'Ready. Press a key...');
+  while not keypressed do;
+end;
+
+{----------------------------------------------------------------------------}
+
+begin
+  InitGraphics;
+  InitPoints(Point);
+  DrawFieldLines(Point);
+  closeGraph;
+  textmode(lastmode);
+end.
+
+{ Little bugged version. New one in the make }
