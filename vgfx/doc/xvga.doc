@@ -1,0 +1,621 @@
+				     XVGA
+				 ----====----
+
+			      Table of contents
+			      =================
+
+		     1. About this document
+		     2. About the library
+		     3. How to contact me
+		     4. Why you should try to reach me
+		     5. System requirements
+		     6. Disclaimer
+		     7. Change in XMode from last release
+		     8. Debugging the library
+		     9. Procedure and Function reference
+
+1. About this document
+======================---------------------------------------------------------
+This document is part of the XVGA package which has been eagerly awaited of
+quite a few on the internet. Some time ago I released a copy of my XVGA
+graphics library for 320 x 200 in 256 colors vga mode. Alas, this didn't
+include any documentation or examples of using this library, so I've had
+a lot of email asking about parameters to procedures, examples, documentation
+and other miscellaneous questions. I started to write a documentation in
+Word for Windows 6.0, but this was lost in a harddisk crash. This may have
+been a blessing in disguise, as I found out that noone is running Word
+when they program. This documentation is written and meant to be a dos
+ascii file, and should be viewable from both dos and windows.
+
+The document is written in a particular random order, so you will have to do
+a little search'n'find to get all the relevant information you need.
+
+2. About the library
+====================-----------------------------------------------------------
+The library is a graphics library for 320 x 200 in 256 colors mode strongly
+biased towards demo programming. It features 118 procedures and functions,
+written in Borland Pascal 7.0, using BASM (Borland Inline assembler). It
+is a 438,856 bytes pascal file, consisting of 22,321 lines of pascal code,
+mostly in assembler.
+
+3. How to contact me
+====================-----------------------------------------------------------
+You may reach me at:
+
+    email:	  lassek@tmih.no
+    isca bbs:	  Lobotomy
+    snail mail:   Lasse VÜgsëther Karlsen
+		  Hans BÅlows Gt. 9B
+		  N-3714 SKIEN, Norway
+    Telephone:	  (+047) 35 52 28 59
+
+4. Why should you try to reach me
+=================================----------------------------------------------
+I, as everybody else, loves praise. Therefore, you should send lots of mail
+to me telling me how good XVGA is.
+
+				REALITY CHECK!
+
+Well, I would really like to have some feedback on the library. For starters
+I would like to hear about problems using it, problems it causes, problems
+with the documentation, bugs and other strange things. I know that the library
+is not the clearest thing to use, and you will almost certainly have lots of
+questions about how to use particular parts of it.
+
+In particular, if you change or add to the library, send me an updated copy
+along with any comments as to why you did it, and you will be credited for
+what you did in the next release.
+
+5. System requirements
+======================---------------------------------------------------------
+To compile the library into a .TPU file (yes, it is a unit), you will need
+at the very least Borland Pascal 6.0. I have not tried it under 6.0, since I
+use Borland Pascal 7.0 myself, and can therefore not positively say that it
+will work or compile under 6.0. As far as I can see it, it should work, but
+you will have to try for yourselves.
+
+To run a program using the library you will need at least a 386. This is
+because the library makes extensive use of the 32-bit math instructions
+in the 386 and higher processors for optimum performance. The library will
+check this itself (see at the end of XVGA.PAS) and report an error if you
+try to run the program on a 286 or lower processor. Also, you will need
+a VGA compatible monitor and video card for this library to work. This is not
+checked by the library, so it will happily churn along on an EGA, and possibly
+creating weird looking images, or possibly hanging the computer.
+
+6. Disclaimer
+=============------------------------------------------------------------------
+Although I have tested 90 % of the routines in this library, I have not
+tested all of them. Quite a few of them (all the XQuadra variants as an
+example) is created by using cut-and-past-and-modify so they should all work,
+but as I mentioned, not all of them are tested. I do not think that there
+should be any strange effects from using the libraries, as long as you
+supply valid parameters. For instance, don't supply the value 0 as VideoSeg
+for the procedures needing this parameter. This is a sure way to crash the
+computer.
+
+I do not take responsibility for the use or misuse or results of such usage
+(or misusage; phew) of the library. All damaged equipment (doubtful) is
+your problem, not mine. That said, it is extremely difficult to damage any
+equipment with this library, as the most likely culprit (XMode) has been
+changed; see section 7.
+
+You, the user or programmer, may use this library as you wish. You have all
+rights to modify or extract parts of this library for own libraries. The
+reason for this "all-rights-dropped" is that I have in the past done the
+same myself, and should therefore not be sour by anyone doing this. This does
+not mean that the code in this library is stolen from someone. I have created
+the whole of this library from scratch, and almost all of the routines are
+created from my own algorithms. The texture mapping algorithm and technique
+is from Dr. Dobbs Journal (forgot which issue) and the PCX algorithm is
+from ZSoft's reference, but the rest is my own work. The library is thus
+completely shareware, public domain, freeware, and anyware. I would like,
+however, that you credit me if you use the library.
+
+7. Change in XMode from last release
+====================================-------------------------------------------
+For the lot of you who has already downloaded a copy of the first release, you
+might notice that XMode has changed. The old XMode let you supply the mode
+value as the parameter, and one user reported to me that his monitor stopped
+working when he experimented with different values for this parameter. Only
+parameter $13 (19 decimal) was valid here, or $3 (back to text-mode), so
+a Boolean parameter was substituted.
+
+8. Debugging the library
+========================-------------------------------------------------------
+If you want to debug a particular procedure or function in the library, you
+will need to copy the offending procedure or function into the program
+file in order to be able to debug it. The reason for this is that debugging
+information must be turned off for the XVGA.PAS file. This is because pascal
+complaints about the "symbol table" becoming full at some point in the file,
+and cannot retain the debugging information.
+
+9. Procedure and Function reference
+===================================--------------------------------------------
+
+General notes.
+
+	˛ All X.., Y.. and Z.. parameters are considered coordinates. Although
+	  some procedures and function accepts 32-bit (longint) parameters,
+	  you should limit the values to +/- 32767, as the internal graphics
+	  engine scales the values up by 65536 in order to gain acceptable
+	  accuracy without floating point.
+	˛ The VideoSeg parameter is the segment of the screen you want to
+	  draw to. This is $A000 (40960 decimal) for the video screen you
+	  look at, but if you want to draw graphics to a "hidden" screen,
+	  supply the correct segment here. Look at the examples for a
+	  better understanding of the usage and reason for this parameter.
+	˛ All Glenz??? procedures are special effects versions of the
+	  same procedure without the Glenz??? name. For instance, the
+	  XQuadra will fill a 4-sided area with the given color, whilst
+	  XQuadraGlenzXOR will xor the area with the given color
+	˛ All procedure that hasn't got Clip in their names clip at the
+	  edge of the screen. The Clip procedures has four parameters
+	  ClipX1, ClipY1, ClipX2 and ClipY2 which specifies the area to
+	  clip to. This area HAS to be inside the screen (0,0)-(319,199)
+	  or strange results may occur. Notice that it is faster to use
+	  the procedures that clip at the edge than using the
+	  Clip... procedures with the clipping coordinates 0,0,319,199, since
+	  the first procedure uses smaller and tighter code.
+	˛ Tetragon means 3-sided, quadragon means 4-sided, and polygon
+	  means n-sided.
+	˛ 3D-coordinates are specified as follows:
+
+		  x: -32767..+32767   = Left to right
+		  y: -32767..+32767   = Top to bottom
+		  z: -32767..+32767   = Front to back of monitor
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Function Visible(X1,Y1,X2,Y2,X3,Y3 : Integer) : Integer;
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+Returns >=0 when the tetragon with the given corner coordinates are visible,
+and <0 when invisible. The coordinates should be specified in a clock-wise
+direction for this to be true. If you specify them in a anticlock-wise
+direction, it returns <=0 when visible. Use this in conjunction with
+3d-rotation.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure Normal(X1,Y1,Z1,X2,Y2,Z2,X3,Y3,Z3 : Integer; Var X,Y,Z : Integer);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+Calculates the face normal of the tetragon. The three sets of coordinates
+(x,y,z) specifies the three corners of the tetragon. The normal vector
+is returned in the X,Y,Z parameters.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Function NormalR(X1,Y1,Z1,X2,Y2,Z2,X3,Y3,Z3 : Integer; Var X,Y,Z : Integer) : Real;
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+Does the same as Normal (actually, uses Normal), but also returns a normalized
+z-value. The z-value is the result of the function call, and ranges from
+-1.0 to +1.0. This can be used for lightsourcing and other effects.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure XTetra(X1,Y1,X2,Y2,X3,Y3 : Integer; Color : Byte; VideoSeg : Word);
+Procedure XTetraClip(X1,Y1,X2,Y2,X3,Y3,ClipX1,ClipY1,ClipX2,ClipY2 : Integer;
+	Color : Byte; VideoSeg : Word);
+Procedure XTetraGlenzADD(X1,Y1,X2,Y2,X3,Y3 : Integer; Color : Byte; VideoSeg : Word);
+Procedure XTetraGlenzADDClip(X1,Y1,X2,Y2,X3,Y3,ClipX1,ClipY1,ClipX2,ClipY2 : Integer;
+	Color : Byte; VideoSeg : Word);
+Procedure XTetraGlenzSUB(X1,Y1,X2,Y2,X3,Y3 : Integer; Color : Byte; VideoSeg : Word);
+Procedure XTetraGlenzSUBClip(X1,Y1,X2,Y2,X3,Y3,ClipX1,ClipY1,ClipX2,ClipY2 : Integer;
+	Color : Byte; VideoSeg : Word);
+Procedure XTetraGlenzOR(X1,Y1,X2,Y2,X3,Y3 : Integer; Color : Byte; VideoSeg : Word);
+Procedure XTetraGlenzORClip(X1,Y1,X2,Y2,X3,Y3,ClipX1,ClipY1,ClipX2,ClipY2 : Integer;
+	Color : Byte; VideoSeg : Word);
+Procedure XTetraGlenzAND(X1,Y1,X2,Y2,X3,Y3 : Integer; Color : Byte; VideoSeg : Word);
+Procedure XTetraGlenzANDClip(X1,Y1,X2,Y2,X3,Y3,ClipX1,ClipY1,ClipX2,ClipY2 : Integer;
+	Color : Byte; VideoSeg : Word);
+Procedure XTetraGlenzXOR(X1,Y1,X2,Y2,X3,Y3 : Integer; Color : Byte; VideoSeg : Word);
+Procedure XTetraGlenzXORClip(X1,Y1,X2,Y2,X3,Y3,ClipX1,ClipY1,ClipX2,ClipY2 : Integer;
+	Color : Byte; VideoSeg : Word);
+Procedure XTetraCopy(X1,Y1,X2,Y2,X3,Y3 : Integer; FromSeg,VideoSeg : Word);
+Procedure XTetraCopyClip(X1,Y1,X2,Y2,X3,Y3,ClipX1,ClipY1,ClipX2,ClipY2 : Integer;
+	FromSeg,VideoSeg : Word);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+These procedures fill a tetragon with the given color. The coordinates
+X1,Y1,X2,Y2,X3,Y3 specified the three corners of the tetragon, the Color
+parameter specifies the color of the tetragon, and VideoSeg the segment to
+draw the tetragon on. Here is a short description of all the routines in
+particular:
+
+   XTetra	      - Normal tetragon
+   XTetraClip	      - Normal tetragon, but specify clipping coordinates
+   XTetraGlenzADD     - Pixel = Pixel + Color (otherwise normal)
+   XTetraGlenzADDClip - Pixel = Pixel + Color, (otherwise as XTetraClip)
+     ...
+   XTetraCopy	      - Copy pixels from the FromSeg screen
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure AsmRotate32(Var SourcePoints,DestPoints : Array Of TPoint32;
+	PointCount : Word; RX,RY,RZ	: Integer);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+This procedures rotates all the points in SourcePoints and places them in
+DestPoints. The number of points to rotate is specified in PointCount, and
+the amount to rotate around the three axes is in RX,RY,RZ. The rotation is
+as follows:
+
+	   RX = Around x-axis, positive is inwards at the top
+	   RY = Around y-axis, positive is inwards at the left
+	   RZ = Around z-axis, positive is clock-wise
+
+This procedure uses the _S and _C variables which are Sin and Cos tables
+used for lookup of rotation constants. These tables must be initialized with
+InitSinCos before AsmRotate32 is called.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure MovePoints32(Var Points : Array Of TPoint32; PointCount : Word;
+	_DX,_DY,_DZ : LongInt);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+Adjusts all the points in the array Points by adding _DX,_DY and _DZ to the
+coordinate values. For instance, if you have a object centered around
+(0,0,0), you may move it to the center of the screen by using
+
+	 MovePoints32(Points,PointCount,160,100,0);
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure AddPerspective32(Var Points : Array Of TPoint32; PointCount : Word;
+	ShiftFactor : Byte; ZDelta : LongInt);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+Adjusts the array of points in Points by applying perspective to them. The
+formula for applying perspective is:
+
+	NewX = (OldX SHL ShiftFactor) DIV (OldZ+ZDelta);
+	NewY = (OldY SHL ShiftFactor) DIV (OldZ+ZDelta);
+
+A sample call (with rather good values) is:
+
+	AddPerspective(Points,PointCount,8,200);
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure InitSinCos(BitSize : Byte);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+Creates the Sin and Cos lookup tables _S and _C by filling them with
+sin and cos values. The values range from -256 to + 256 and are integer
+values. The number of values (angles) in the tables is:
+
+	1 SHL BitSize
+
+For instance, the call:
+
+	InitSinCos(10);
+
+will create these tables (equivalent of):
+
+     _S^[0..1023] Of Integer;
+     _C^[0..1023] Of Integer;
+
+InitSinCos also initializes the TableMask value to the highest index for
+the tables. You may then use constructs like:
+
+	    Angle := (Angle+Delta) And TableMask;
+
+to wrap around the ends of the tables.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure VRet;
+Procedure TestCPU;
+Procedure TestCPULine;
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+These three procedures does almost the same thing: they wait for the vertical
+retrace to occur. When the video screen is redrawn on the monitor, a light
+beam is moving rapidly from top to bottom of the monitor. For a 70Hz monitor,
+this is done 70 times per second. If you happen to update the video contents
+when this happens, you may see small glitches in the graphics; some parts
+of the screen has been changed, whilst other parts hasn't. To avoid this, you
+may start all updates of the contents when the beam moves back from the bottom
+towards the top (it doesn't update the monitor during this). This is called
+the vertical retrace.
+
+The VRet procedure simply waits for the beam to reach the bottom before it
+returns. TestCPU and TestCPULine uses color 0 to show how much time you have
+left to update the screen, and still use only one "frame" per video update. One
+frame is considered the time it takes the beam to go from the top to the bottom,
+and then back to the top again.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure ClearFake(FakeSeg : Word);
+Procedure ClearFakePart(FakeSeg : Word; X1,Y1,X2,Y2 : Word);
+Procedure ClearFake2Color(FakeSeg : Word; Color : Byte);
+Procedure ClearFakePart2Color(FakeSeg : Word; X1,Y1,X2,Y2 : Word; Color : Byte);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+These procedures clear the video screen, either to color 0, or to a specified
+color. The Part procedures also allow you to clear only a portion (or part)
+of the screen.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure ShowFake(FakeSeg : Word);
+Procedure ShowFakePart(FakeSeg : Word; X1,Y1,X2,Y2 : Word);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+The Show procedures copies the screen to segment $A000 which is the visible
+screen on your monitor. This allows you to set aside a portion of memory for
+a "fake" screen, do all the drawing on this screen, and then rapidly copy the
+"fake" screen to the visible screen. See the accompanying examples for more
+understanding of the usage and reason for this.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure QSort32(Var SortList : Array Of TSortRec32; SortCount : Word);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+This sorts the SortList array, according to the SortValue field in the
+records (see TSortRec32 in XVGA.PAS). The number of records to sort is
+specified in SortCount. This procedure is used in conjunction with 3D
+animation. See the accompanying examples for more info.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure XQuadra(X1,Y1,X2,Y2,X3,Y3,X4,Y4 : Integer; Color : Byte; VideoSeg : Word);
+Procedure XQuadraClip(X1,Y1,X2,Y2,X3,Y3,X4,Y4,ClipX1,ClipY1,ClipX2,ClipY2 : Integer;
+	Color : Byte; VideoSeg : Word);
+Procedure XQuadraCopy(X1,Y1,X2,Y2,X3,Y3,X4,Y4 : Integer; FromSeg,VideoSeg : Word);
+Procedure XQuadraCopyClip(X1,Y1,X2,Y2,X3,Y3,X4,Y4,ClipX1,ClipY1,ClipX2,ClipY2 : Integer;
+	FromSeg,VideoSeg : Word);
+Procedure XQuadraGlenzADD(X1,Y1,X2,Y2,X3,Y3,X4,Y4 : Integer; Color : Byte;
+	VideoSeg : Word);
+Procedure XQuadraGlenzADDClip(X1,Y1,X2,Y2,X3,Y3,X4,Y4,ClipX1,ClipY1,ClipX2,ClipY2 : Integer;
+	Color : Byte; VideoSeg : Word);
+Procedure XQuadraGlenzSUB(X1,Y1,X2,Y2,X3,Y3,X4,Y4 : Integer; Color : Byte;
+	VideoSeg : Word);
+Procedure XQuadraGlenzSUBClip(X1,Y1,X2,Y2,X3,Y3,X4,Y4,ClipX1,ClipY1,ClipX2,ClipY2 : Integer;
+	Color : Byte; VideoSeg : Word);
+Procedure XQuadraGlenzOR(X1,Y1,X2,Y2,X3,Y3,X4,Y4 : Integer; Color : Byte;
+	VideoSeg : Word);
+Procedure XQuadraGlenzORClip(X1,Y1,X2,Y2,X3,Y3,X4,Y4,ClipX1,ClipY1,ClipX2,ClipY2 : Integer;
+	Color : Byte; VideoSeg : Word);
+Procedure XQuadraGlenzAND(X1,Y1,X2,Y2,X3,Y3,X4,Y4 : Integer; Color : Byte;
+	VideoSeg : Word);
+Procedure XQuadraGlenzANDClip(X1,Y1,X2,Y2,X3,Y3,X4,Y4,ClipX1,ClipY1,ClipX2,ClipY2 : Integer;
+	Color : Byte; VideoSeg : Word);
+Procedure XQuadraGlenzXOR(X1,Y1,X2,Y2,X3,Y3,X4,Y4 : Integer; Color : Byte;
+	VideoSeg : Word);
+Procedure XQuadraGlenzXORClip(X1,Y1,X2,Y2,X3,Y3,X4,Y4,ClipX1,ClipY1,ClipX2,ClipY2 : Integer;
+	Color : Byte; VideoSeg : Word);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+These procedures does the same thing as the XTetra procedures; the only
+difference is that they create 4-sided areas instead of 3-sided areas. Note
+that the coordinates must be specified in a clock-wise direction. You may
+not create "fly" quadragons, like this:
+
+	       X1 -------- X2
+		  \	 /
+		   \	/
+		    \  /
+		     \/
+		     /\
+		    /  \
+		   /	\
+		  /	 \
+	       X3 -------- X4
+
+Although this particular example will work, Try rotating this 90 degress to one
+side (tilt it to the right or left). This will then become a rectangular
+area.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure XPlot(X,Y : Integer; Color : Byte; VideoSeg : Word);
+Procedure XPlotClip(X,Y,ClipX1,ClipY1,ClipX2,ClipY2 : Integer; Color : Byte; VideoSeg : Word);
+Procedure XPlotXOR(X,Y : Integer; Color : Byte; VideoSeg : Word);
+Procedure XPlotXORClip(X,Y,ClipX1,ClipY1,ClipX2,ClipY2 : Integer; Color : Byte; VideoSeg : Word);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+These procedures plot one single pixel on the screen.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure XVZoomLine(X,Y1,Y2 : Integer; Texture : PChar; TextureHeight,VideoSeg : Word);
+Procedure XVZoomLineClip(X,Y1,Y2,ClipY1,ClipY2 : Integer; Texture : PChar; TextureHeight,VideoSeg : Word);
+Procedure XHZoomLine(Y,X1,X2 : Integer; Texture : PChar; TextureWidth,VideoSeg : Word);
+Procedure XHZoomLineClip(Y,X1,X2,ClipX1,ClipX2 : Integer; Texture : PChar; TextureWidth,VideoSeg : Word);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+The texture in Texture (which is a single-width/height array of pixels)
+will be scaled to fit the given area. This could be used to create
+Wolfenstein 3D-like graphics. You could use XVZoomLine to draw the walls
+(V stands for vertical) and XHZoomLine for the floors and ceilings (H for
+horizontal). As an example, try plotting some graphics in the top line of
+the screen (y=0), and use this code:
+
+    For Y:=100 To 199 Do
+	XHZoomLine(Y,0,(Y-100)*3,Ptr($A000,0),320,$A000);
+
+You will then see how this operates.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure XTetraTexture320(X1,Y1,X2,Y2,X3,Y3,TX1,TY1,TX2,TY2,TX3,TY3 : Integer;
+	Texture : PChar; VideoSeg : Word);
+Procedure XTetraTexture320Clip(X1,Y1,X2,Y2,X3,Y3,TX1,TY1,TX2,TY2,TX3,TY3,ClipX1,ClipY1,ClipX2,ClipY2 : Integer;
+	Texture : PChar; VideoSeg : Word);
+Procedure XTetraTexture320SpaceCutZBufferClip(X1,Y1,Z1,X2,Y2,Z2,X3,Y3,Z3,TX1,TY1,TX2,TY2,TX3,TY3,
+	ClipX1,ClipY1,ClipX2,ClipY2 : Integer;
+	Texture : PChar; ZSeg,VideoSeg : Word);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+This is routines for texture mapping into tetragons. The
+X?,Y? is the on-screen coordinates of the tetragon. The TX?,TY? is the
+coordinates of the texture to map into the tetragon. Imagine that you
+have an image somewhere in memory (pointed to by Texture). In this image, you
+select a triangular area you wish to use as a texture. The coordinates for
+this area is specified in TX1,TY1,TX2,TY2,TX3,TY3. Now, you select three
+new coordinates in X1,Y1,X2,Y2,X3,Y3 and when you call XTetraTexture320 with
+these parameters the triangular area will be twisted, rotated or thwarted to
+fit into the new area specified in X1,Y1,...
+
+The SpaceCutZBuffer also needs a separate image for storing z-values as pixels.
+The Z1,Z2,Z3 coordinates specified in the parameter list is the depth of the
+three corners of the tetragon. The tetragon will then be mapped as normal,
+but only those pixels which are drawn nearer the user than previous pixels
+at the same position will be drawn. See the examples for more info.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure XTetraGourad(X1,Y1,C1,X2,Y2,C2,X3,Y3,C3 : Integer; VideoSeg : Word);
+Procedure XTetraGouradClip(X1,Y1,C1,X2,Y2,C2,X3,Y3,C3,ClipX1,ClipY1,ClipX2,ClipY2 : Integer; VideoSeg : Word);
+Procedure XTetraGouradSpaceCut(X1,Y1,C1,X2,Y2,C2,X3,Y3,C3 : Integer; VideoSeg : Word; CutMask : Byte);
+Procedure XTetraGouradSpaceCutClip(X1,Y1,C1,X2,Y2,C2,X3,Y3,C3,ClipX1,ClipY1,ClipX2,ClipY2 : Integer;
+	VideoSeg : Word; CutMask : Byte);
+Procedure XTetraGouradSpaceCutZBuffer(X1,Y1,Z1,C1,X2,Y2,Z2,C2,X3,Y3,Z3,C3 : Integer;
+	VideoSeg,ZSeg : Word);
+Procedure XTetraGouradGlenzADDSpaceCutZBuffer(X1,Y1,Z1,C1,X2,Y2,Z2,C2,X3,Y3,Z3,C3 : Integer;
+	VideoSeg,ZSeg : Word);
+Procedure XTetraGouradGlenzORSpaceCutZBuffer(X1,Y1,Z1,C1,X2,Y2,Z2,C2,X3,Y3,Z3,C3 : Integer;
+	VideoSeg,ZSeg : Word);
+Procedure XTetraGouradSpaceCutZBufferClip(X1,Y1,Z1,C1,X2,Y2,Z2,C2,X3,Y3,Z3,C3,ClipX1,ClipY1,ClipX2,ClipY2 : Integer;
+	VideoSeg,ZSeg : Word);
+Procedure XTetraGouradGlenzADDSpaceCutZBufferClip(X1,Y1,Z1,C1,X2,Y2,Z2,C2,X3,Y3,Z3,C3,ClipX1,ClipY1,ClipX2,ClipY2 : Integer;
+	VideoSeg,ZSeg : Word);
+Procedure XTetraGouradGlenzORSpaceCutZBufferClip(X1,Y1,Z1,C1,X2,Y2,Z2,C2,X3,Y3,Z3,C3,ClipX1,ClipY1,ClipX2,ClipY2 : Integer;
+	VideoSeg,ZSeg : Word);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+This draws gourad-shaded tetragons. The tetragons also specify a color for
+each of the corners, and the colors will blend across the tetragon.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure XVGourad(X,Y1,Y2 : Integer; C1,C2 : Byte; VideoSeg : Word);
+Procedure XHGourad(Y,X1,X2 : Integer; C1,C2 : Byte; VideoSeg : Word);
+Procedure XVWideGourad(X1,Y1,X2,Y2 : Integer; C1,C2 : Byte; VideoSeg : Word);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+Draws a vertical or horizontal line, shaded from Y1 to Y2 or X1 to X2 with
+the colors C1 to C2 evenly distributed along the line. XVWideGourad does the
+same as XVGourad, but you may draw lines which are wider than one pixel.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure XHLine(Y,X1,X2 : Integer; Color : Byte; VideoSeg : Word);
+Procedure XVLine(X,Y1,Y2 : Integer; Color : Byte; VideoSeg : Word);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+Draws either a horizontal or a vertical line in a given color.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure XLine(X1,Y1,X2,Y2 : Integer; Color : Byte; VideoSeg : Word);
+Procedure XLineClip(X1,Y1,X2,Y2,ClipX1,ClipY1,ClipX2,ClipY2 : Integer; Color : Byte; VideoSeg : Word);
+Procedure XLineGlenzXOR(X1,Y1,X2,Y2 : Integer; Color : Byte; VideoSeg : Word);
+Procedure XLineGlenzXORClip(X1,Y1,X2,Y2,ClipX1,ClipY1,ClipX2,ClipY2 : Integer; Color : Byte; VideoSeg : Word);
+Procedure XLineGlenzSUB(X1,Y1,X2,Y2 : Integer; Color : Byte; VideoSeg : Word);
+Procedure XLineGlenzSUBClip(X1,Y1,X2,Y2,ClipX1,ClipY1,ClipX2,ClipY2 : Integer; Color : Byte; VideoSeg : Word);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+Draws lines in a given color.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure XBox(X1,Y1,X2,Y2 : Integer; Color : Byte; VideoSeg : Word);
+Procedure XBoxClip(X1,Y1,X2,Y2,ClipX1,ClipY1,ClipX2,ClipY2 : Integer; Color : Byte; VideoSeg : Word);
+Procedure XBoxGlenzXOR(X1,Y1,X2,Y2 : Integer; Color : Byte; VideoSeg : Word);
+Procedure XBoxGlenzXORClip(X1,Y1,X2,Y2,ClipX1,ClipY1,ClipX2,ClipY2 : Integer; Color : Byte; VideoSeg : Word);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+Draws the outline of a box.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure XTetraLine(X1,Y1,X2,Y2,X3,Y3 : Integer; Color : Byte; VideoSeg : Word);
+Procedure XQuadraLine(X1,Y1,X2,Y2,X3,Y3,X4,Y4 : Integer; Color : Byte; VideoSeg : Word);
+Procedure XTetraLineClip(X1,Y1,X2,Y2,X3,Y3,ClipX1,ClipY1,ClipX2,ClipY2 : Integer; Color : Byte; VideoSeg : Word);
+Procedure XQuadraLineClip(X1,Y1,X2,Y2,X3,Y3,X4,Y4,ClipX1,ClipY1,ClipX2,ClipY2 : Integer; Color : Byte; VideoSeg : Word);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+Uses XLine to draw the lines making up the sides of the tetragon or quadragon.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure XRectangle(X1,Y1,X2,Y2 : Integer; Color : Byte; VideoSeg : Word);
+Procedure XRectangleGlenzXOR(X1,Y1,X2,Y2 : Integer; Color : Byte; VideoSeg : Word);
+Procedure XRectangleClip(X1,Y1,X2,Y2,ClipX1,ClipY1,ClipX2,ClipY2 : Integer; Color : Byte; VideoSeg : Word);
+Procedure XRectangleGlenzXORClip(X1,Y1,X2,Y2,ClipX1,ClipY1,ClipX2,ClipY2 : Integer; Color : Byte; VideoSeg : Word);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+Draws a solid filled rectangle with the given color.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Function XGetPixel(X,Y : Integer; VideoSeg : Word) : Byte;
+Function XGetPixelClip(X,Y,ClipX1,ClipY1,ClipX2,ClipY2 : Integer; VideoSeg : Word) : Byte;
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+Returns the pixel value at the given coordinates. Returns 0 if outside the
+screen or clipping area.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure XMode(XVGAMode : Boolean);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+If called with the TRUE parameter, will set the monitor into graphics mode. You
+must do this before you call any of the other procedures in this library which
+affects the video screen (has a VideoSeg parameter). When you are finished with
+the video screen, call it with the FALSE parameter to set it back to
+80x25 16-color text mode.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure XSetRGB(Index,R,G,B : Byte);
+Procedure XSetRGBMany(StartIndex : Byte; ColorCount : Word; Var RGBData);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+Sets the appearance of the color(s). XSetRGB sets one color (index) to the
+red/green/blue values R,G,B (ranging from 0 [darkest] to 63 [lightest]).
+White is (63,63,63), black is (0,0,0), red is (63,0,0) and so on. XSetRGBMany
+takes data from an array, specified in RGBData, and sets ColorCount colors from
+the color StartIndex and onwards.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure XGetRGB(Index : Byte; Var R,G,B : Byte);
+Procedure XGetRGBMany(StartIndex : Byte; ColorCount : Word; Var RGBData);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+The XGetRGB... procedures are the direct opposites from XSetRGB and returns the
+R/G/B values for the color(s) specified.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Function XLoadPCX320x200SetPalette(FileName : String; VideoSeg : Word) : Integer;
+Function XLoadPCX(FileName : String; Var Width,Height : Word; Var RGB; VideoSeg : Word) : Integer;
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+Loads 320x200 in 256 color PCX file to the segment specified. If you use
+XLoadPCX, you may load <=320x<=200 images, and you get the palette loaded
+to the array RGB. The functions returns these possible values:
+   0 = Success
+   1 = Unable to find/open file
+   2 = Unable to read header from file (file<128 bytes)
+   3 = Invalid format (color/size/format/... (image too large >128000 bytes))
+   4 = Unable to read image (truncated or disk error)
+   5 = Not enough memory for buffers
+   6 = Unable to read palette (image should be ok though)
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure XScaleBitMap(X1,Y1,X2,Y2 : Integer;
+	Var BitMap; BitMapWidth,BitMapHeight : Word; VideoSeg : Word);
+Procedure XScaleBitMapClip(X1,Y1,X2,Y2,ClipX1,ClipY1,ClipX2,ClipY2 : Integer;
+	Var BitMap; BitMapWidth,BitMapHeight : Word; VideoSeg : Word);
+Procedure XScaleTransparentBitMap(X1,Y1,X2,Y2 : Integer;
+	Var BitMap; BitMapWidth,BitMapHeight : Word; TranspColor : Byte; VideoSeg : Word);
+Procedure XScaleTransparentBitMapClip(X1,Y1,X2,Y2,ClipX1,ClipY1,ClipX2,ClipY2 : Integer;
+	Var BitMap; BitMapWidth,BitMapHeight : Word; TranspColor : Byte; VideoSeg : Word);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+These procedures are somewhat specicialized versions of the XTetraTexture
+procedures in that they take the image in BitMap which is
+BitMapWidth x BitMapHeight pixels in size, and scales it to fit into
+(X1,Y1)-(X2,Y2). This is all done in a rectangular area so faster scaling is
+done. In the transparent procedures you also supply a TranspColor. All pixels
+in the image which has this color will not be drawn, allowing you to make
+portions of the image transparent.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure XPutBitMap(X,Y,Width,Height : Integer; BitMap : PChar; VideoSeg : Word);
+Procedure XPutBitMapClip(X,Y,Width,Height,ClipX1,ClipY1,ClipX2,ClipY2 : Integer;
+	BitMap : PChar; VideoSeg : Word);
+Procedure XPutTransparentBitMap(X,Y,Width,Height : Integer; BitMap : PChar;
+	TranspColor : Byte; VideoSeg : Word);
+Procedure XPutTransparentBitMapClip(X,Y,Width,Height,ClipX1,ClipY1,ClipX2,
+	ClipY2 : Integer; BitMap : PChar; TranspColor : Byte; VideoSeg : Word);
+Procedure XPutBitMapTranslate(X,Y,Width,Height : Integer; BitMap : PChar;
+	VideoSeg : Word; Var Translate);
+Procedure XPutBitMapClipTranslate(X,Y,Width,Height,ClipX1,ClipY1,ClipX2,ClipY2 : Integer;
+	BitMap : PChar; VideoSeg : Word; Var Translate);
+Procedure XPutTransparentBitMapTranslate(X,Y,Width,Height : Integer; BitMap : PChar;
+	TranspColor : Byte; VideoSeg : Word; Var Translate);
+Procedure XPutTransparentBitMapClipTranslate(X,Y,Width,Height,ClipX1,ClipY1,ClipX2,
+	ClipY2 : Integer; BitMap : PChar; TranspColor : Byte; VideoSeg : Word;
+	Var Translate);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+These works like the XScaleBitMap procedures, but they will not scale the
+images at all. The images are simply copied (with clipping) to the screen.
+The Translate procedures will also take an array[0..255] as the Translate
+parameter. All pixels to be drawn are mapped into this array, and the value
+at that place in the array is drawn instead.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure XGetBitMap(X1,Y1,X2,Y2 : Integer; Var BitMap; VideoSeg : Word);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+This procedure extracts the pixels from the screen and puts them in BitMap.
+This procedure does not feature clipping.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure XFillPoly(Var Lines : Array Of TLine32; LineCount : Word; Color : Byte; VideoSeg : Word);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+Fills a regular polygon. This suffers from the "fly" syndrome you have with the
+XQuadra procedures.
+
+‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
+Procedure XSirds(SourceSeg,DestSeg : Word; Levels : Byte; Color1,Color2 : Byte);
+ﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂﬂ
+Takes the height-image in SourceSeg, and creates a
+      Single Image Random Dot Stereogram
+from this. The Levels parameter specifies how many depth levels you have
+in the image. This must be 2*max_pixel+1, and less than 100. Color1 and
+Color2 is the pixel values of the two colors used to create the sirds image.

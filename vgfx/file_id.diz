@@ -1,0 +1,10 @@
+XVGA Release II
+A graphics library for 320x200,
+256 color VGA mode, featuring
+110+ graphics functions,
+including gourad-shading,
+texture-mapping, 3d-rotation,
+sirds-creation, spacecutting
+and more. 22000+ lines of
+pascal/assembly code with
+documentation and examples.

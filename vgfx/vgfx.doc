@@ -1,0 +1,1295 @@
+
+                 VGFX v1.00  (C) Copyright 1994 Bill Quesnel
+                 -------------------------------------------
+               Design & Coding by Bill Quesnel & Brian Manning
+
+
+* What is VGFX?
+---------------
+
+    VGFX is a graphics engine that provides animation routines for the
+    320x200x256 VGA x-graphics mode.  This mode supports 4 video pages
+    which can be used to generate ultra-SMOOTH animations!  Other feat-
+    ures of the library include:  mouse  &  joystick support,  loading
+    of PCX and BMP pictures, palette routines, fonts and Sound Blaster
+    support for playing digitized voice (VOC) files.
+
+
+    Here's a summary of features:
+
+    o Page-flipping engine for ultra-smooth animation, page
+      flipping is the best way to create smooth animations on
+      the PC, now you can do it too!
+
+    o Mouse and Joystick/Gravis GamePad supported!
+
+    o SoundBlaster .VOC support from 1-44khz sampling rates,
+      these routines are totally independant of VGFX, so you
+      can use these routines without having to use VGFX!
+       (Requires a SoundBlaster or compatible sound card)
+
+    o GLIB, a utility that allows you to store all kinds of
+      files in one massive database 'library'.  All of VGFX's
+      routines support this 'library' format.  Wouldn't your
+      programs look better if they had one big data file vs.
+      2000 little data, picture and sound files?  These
+      routines only add around 7ms overhead vs. traditional
+      file handling!!
+
+    o EMS memory support.  These routines allow you to store
+      anything (including sprites/images) in EMS memory so
+      you can fit more data!  (Requires LIM EMS 3.0 or later)
+
+    o Image format support, VGFX supports PCX reading and BMP
+      reading/writing!
+
+    o Palette manipulation & fading.
+
+    o Fonts.. 31 fonts included, you can underline fonts, make
+      them double wide/high or make them italic!
+
+
+
+
+* How do I use VGFX?
+--------------------
+
+    To install VGFX you need to copy the VGFX.TPU into the directory
+    where you keep your Units.  For example:
+
+        COPY VGFX.TPU C:\BP\UNITS
+
+    After you have completed this you are ready to use VGFX!  You need
+    only to inlcude VGFX in your uses statement:
+
+    Program Sample;
+    Uses Crt, Dos, VGFX;
+
+    Var
+    . . .
+
+
+* What do I get when I register?
+--------------------------------
+
+    The latest version of VGFX which does not contain the 5 second
+    registration delay.  You will also recieve hints & tips on how
+    to develop games using VGFX.  This will automatically ensure
+    that you will get future updates of VGFX for the upgrade price
+    of $5.
+
+
+
+* VGFX Routine Summary
+======================
+
+
+* VGFX_Init
+-----------
+Name        : VGFX_Init
+Declaration : Function VGFX_Init : Boolean;
+
+  Initializes the video card & routines, these routines use the 320x200
+  256-color VGA x-mode, the screen is represented in pixels starting at
+  0,0 to 319,199 (320x200).  There are four video pages this engine uses,
+  they are numbered 1-4.  This only needs to be called once at the
+  begining of your program.  This function returns FALSE if the user
+  does not have VGA otherwise TRUE.
+
+
+* VGFX_Done
+-----------
+Name        : VGFX_Done
+Declaration : Procedure VGFX_Done;
+
+  Restores the video card to it's previous state (i.e.- text mode) and
+  uninitializes the video routines.  This routine is not required to
+  be called at the end of your program.  When your program terminates,
+  whether by normal termination (i.e.- end of the program) or by
+  runtime error, these routines will still restore the video card
+  and free allocated memory.
+
+
+* Clearscreen
+-------------
+Name        : ClearScreen
+Declaration : Procedure ClearScreen (color : byte);
+
+  This procedure clears the screen on the specified page with the
+  given color.
+
+  (See also: SetWorkPage)
+
+
+* GetPixel
+----------
+Name        : GetPixel
+Declaration : Function GetPixel (x, y : integer) : Byte;
+
+  This function returns the color at the current X/Y pixel position.
+
+
+* PutPixel
+----------
+Name        : PutPixel
+Declaration : Procedure PutPixel (x, y : integer;  color : byte);
+
+  The procedure draws a pixel at x/y using the specified color.
+
+  (See also : SetWorkPage)
+
+
+
+* GetImage
+----------
+Name        : GetImage
+Declaration : Procedure GetImage (var pict   : array of byte;
+                                  x, y, w, h : integer);
+
+  This procedure grabs an image from the specified video page (page 1
+  2 or 0).  It gets the image from the current x/y with the specified
+  w and h.  This procedure does not support clipping!  Make sure not
+  to go outside the 320x200 boundaries.
+
+
+  (See also : SetWorkPage)
+
+
+* PutImage
+----------
+Name        : PutImage
+Declaration : Procedure PutImage (var pict   : array of byte;
+                                  x, y, w, h : integer);
+
+  This procedure puts an image on the specified video page (page 1
+  2 or 0).  It puts the image at the current x/y with the specified
+  w and h.
+
+  (See also : SetWorkPage)
+
+
+* FlipImage
+-----------
+Name        : FlipImage
+Declaration : Procedure FlipImage (var pict   : array of byte;
+                                   x, y, w, h : integer);
+
+  This procedure puts an image on the specified video page (page 1
+  2 or 0).  It puts the image at the current x/y with the specified
+  w and h.  The image is drawn to the screen reversed.
+
+  (See also : SetWorkPage)
+
+
+* PutClip
+---------
+Name        : PutClip
+Declaration : Procedure PutClip (var pict   : array of byte;
+                                 x, y, w, h : integer);
+
+  This procedure puts an image on the specified video page (page 1
+  2 or 0).  It puts the image at the current x/y with the specified
+  w and h.  The image is 'clipped' if it is drawn off the screen.
+  Example: If you were to use PutImage with an x value of -20, then
+  the image would wrap around to the opposite side of the screen.
+  Where as PutClip would only show the portion of the image that is
+  within the physical page.
+
+  (See also : SetWorkPage)
+
+
+
+* PutClipD
+----------
+Name        : PutClipD
+Declaration : Procedure PutClip (var pict   : array of byte;
+                                 x, y, w, h : integer);
+
+  This procedure is identical to PutClip except for an intentional
+  delay.  I noticed a speed difference when writing the Game_SampleDemo,
+  so I added this procedure.  It simulates the delay FlipClip creates
+  because it has to flip the image.  So when doing an animation, use this
+  along with your FlipClip so it will move at the same rate in either
+  direction.
+
+
+* FlipClip
+----------
+Name        : FlipClip
+Declaration : Procedure FlipClip (var pict   : array of byte;
+                                  x, y, w, h : integer);
+
+  This procedure puts an image on the specified video page (page 1
+  2 or 0).  It puts the image at the current x/y with the specified
+  w and h.  The image is drawn reversed *and* 'clipped' if it is drawn
+  off the screen.  Example: If you were to use PutImage with an x
+  value of -20, then the image would wrap around to the opposite side
+  of the screen.  Where as PutClip would only show the portion of the
+  image that is within the physical page.
+
+  (See also : SetWorkPage)
+
+
+* PageCopy
+----------
+Name        : PageCopy
+Declaration : Procedure PageCopy (sourcePage, destPage : byte);
+
+  This procedure copies "sourcePage" to the "destPage".  Both
+  values ranges are from 1-4.
+
+
+* ShowPage
+----------
+Name        : ShowPage
+Declaration : Procedure ShowPage (vpage : word);
+
+  This procedure displays the specified video page.
+
+
+* SetWorkPage
+-------------
+Name        : SetWorkPage
+Declaration : Procedure SetWorkPage (vpage : byte);
+
+  This procedure sets the current work page.  PutImage, FlipImage,
+  PutClip, FlipClip, VPrint, FontPrint, PutPixel, and ClearScreen.
+
+  Example:
+          SetWorkPage (1);
+          PutImage (cel1^, 100, 100, 25, 25);
+
+          * this would "Put" an image on Page 1 of the video page.
+
+
+
+* GetWorkPage
+-------------
+Name        : GetWorkPage
+Declaration : Function GetWorkPage : Byte;
+
+  This function returns the "active" video page (the page that is
+  currently being drawn to).
+
+
+* Update
+--------
+Name        : Update
+Declaration : Procedure Update;
+
+  This procedure ties into many of the other procedures in VGFX and
+  using them in conjunction with one another creates an animation
+  "engine".  Update does this by keeping track of which video page
+  is currently being drawn to and which video page is currently
+  being displayed.  Update also does all the undrawing that needs to
+  be done, so the only thing you have to do is call a drawing routine
+  (or routines as the case may be) and an Update.  You would not use
+  update to display simple pictures to the screen- it is *only* used
+  to generate animatons.  Update should be called within a loop, this
+  is how it constantly keeps track of what to draw and what to show.
+
+  Let's take a look at a basic 'Update' example:
+
+  Var
+     QUIT : BOOLEAN;
+
+     Begin
+         {  CODE FOR INITIALIZING THE GRAPHICS MODE, AND GRABBING
+            AN ANIMATION WOULD GO HERE.  LOADING A BACKGROUND SCENE
+            IS OPTIONAL AS WELL. }
+
+          QUIT := FALSE;
+          repeat
+                {  ANY ANIMATIONS TO BE DONE ARE CALLED ANYWHERE IN
+                   THE LOOP BEFORE THE UPDATE PROCEDURE }
+                PutImage(AnimationCel^, x, y, 25, 25);
+
+                { UPDATE WILL DRAW ALL CURRENT ANIMATIONS TO THE
+                  HIDDEN PAGE, THEN 'FLIP' TO THAT PAGE (I.E MAKE IT
+                  VISIBLE). }
+                Update;
+
+                if (keypressed) then
+                begin
+                  key := UpCase(readkey);
+                  if (key = 'Q') then QUIT := TRUE;
+
+                  { KEYBOARD CONTROLS FOR SPRITES COULD BE ADDED TO
+                    HERE }
+                end;  { if\then }
+          until (QUIT = TRUE);
+
+
+
+  We designed VGFX around the Update procedure.  You do not have to
+  use the Update procedure - it will just make your life a HELL of a
+  lot easier!  If you do not use Update you will have to keep track
+  of all current animations, on both pages.  You will have to store
+  all of the background information and restore every time the
+  animation changes position.
+
+  * SEE MOUSE ROUTINE: MINIT
+        - Mouse routines are included in VGFX.  They were also
+          designed around Update.  I am drawing the mouse cursor, not
+          the driver, so if you do not use Update (and are generating
+          animations on your own) and wish to use the mouse then you
+          will have to save the background behind it as well- just as
+          you would for a sprite animation.
+
+
+  Update uses page 4 to constantly redraw the "static" background.
+  If you "put" any data to page 4, then that data will become part
+  of the background.  This is usefull if something must change 1 time;
+  if it is to change anymore than that it would probably be best to draw
+  it as an animation.  A good example would be in an RolePlaying type
+  game.  If your guy picks up a dagger that is laying on the ground,
+  then the dagger will need to disappear after it has been picked up.
+  So instead of constantly drawing the dagger as an animation it would
+  be more applicable to have that tiny portion of the background saved
+  (once with the dagger, once without the dagger), so that when the
+  guy picks the dagger up, just that portion of the background is
+  restored (picture w/out the dagger).
+
+
+  (SEE GUYDEMO.EXE & GUYDEMO.PAS)
+  GUYDEMO.PAS was written to show you the difference between using
+  the Update procedure for "page-flipping" animations and programming
+  the "page-flips" manually.  As you will see the Update engine is
+  running much slower than the manual engine.  This is because Update
+  is redrawing the whole screen to keep the background updated.  By
+  manually keeping track of the "page-flips" you achieve a lot faster
+  animation.  The disadvantage to manually "page-flipping" is that a
+  lot more programming is required.  If you are using VGFX and
+  writing a game that requires a 486SX-20 or better, than I would
+  suggest using Update.  If your game requires a 386SX or better than
+  you may want to use manual "page-flipping".  Another disadvantage
+  to manual "page-flipping" is that some routines in VGFX do support
+  the manual method.  For example, the mouse routines.  Although you
+  can use MShow and MPress, MMove will not work.  If you call MMove
+  without Update, the mouse will leave "trails" behind.  You will have
+  to keep track of that on your own.  This may seem like a bit of a
+  drag, but if you have already figured out the code for manually
+  updating your game sprites (animations) then you can easily use the
+  same method on the mouse cursor.  The are two global variables in
+  VGFX, mX and mY.  These two variables are the current mouse coords.
+  We would suggest creating two var's: lastX and lastY.  Here is some
+  theory on to as how you could do that.  We have not tested but it
+  seems straightforward.
+
+
+
+  *** THEORY ***
+  ==============
+
+  mX = 10
+  mY = 10
+
+  lastX = mX
+  lastY = mY
+
+  start of the loop
+
+        Undraw the mouse cursor
+
+        MMove is called - this gets the new mouse position
+          * New Mouse position was calculated by MMove. mX and mY
+            both equal the new mouse position (if it was moved).
+
+        lastX = mX
+        lastY = mY
+
+  end of loop
+
+
+* UpdatePalette
+---------------
+Name        : UpdatePalette
+Declaration : Procedure UpdatePalette (SyncOn : byte);
+
+  This procedure updates the current palette.  The palette is held in
+  an array called pal (pal : array[1..768] of byte).  The information
+  is stored as: r,g,b, r,g,b, r,g,b etc.  I have left this array
+  global in case anyone needs to play around with the palettes.
+
+
+* RestorePalette
+----------------
+Name        : RestorePalette
+Declaration : Procedure RestorePalette;
+
+  This restores the current palette to a previously loaded one.  When
+  you load a .PCX or .BMP you have the option of using the current
+  palette or loading the palette that was saved in the picture file.
+  If you choose to use the current palette, a spare copy of the
+  picture files palette is also saved.  For example:
+
+  BlankPalette;                -> Blacks out the current palette
+  showpcx ('frac.pcx', 1, 1);  -> this uses the current palette when
+                                  displaying the picture, and draws
+                                  it on page 1.  It also saves a copy
+                                  of the palette stored in the PCX
+                                  file.
+
+  FadeIn (1, 1, 0);            -> You could do this fades the palette
+                                  from Black to the original colors of
+                                  the PCX file.
+
+  RestorePalette;              -> You could do this to instantly load
+                                  the palette from black to color!
+
+
+
+* FadeOut
+---------
+Name        : FadeOut
+Declaration : Procedure FadeOut (Step, SyncOn, DTime : byte);
+
+  This procedure fades the current palette to black.  Step is the
+  amount the palette is decremented with each fade.  A step rate of
+  one will slowly fade the palette to black- this is a standard
+  fading effect used in many games.  A step rate of five will quickly
+  fade the palette to black.  SyncOn determines whether or not the
+  palette update will be synchronized to the vertical retrace.
+  Syncing creates a very *SMOOTH* fading effect (see DEMO.PAS).
+  DTime is the fading delay in milliseconds.  If you are syncing to
+  the vertical retrace then you probably will not want a delay,
+  therefore you should pass a value of zero.
+
+
+* FadeOutStep
+-------------
+Name        : FadeOutStep
+Declaration : Procedure FadeOutStep (Step, SyncOn, DTime : byte);
+
+  This procedure fades out the palette one pass at a time.  This
+  allows you to slowly fade the screen within a loop.  (See DEMO.PAS)
+
+  See FadeOut for parameter information.
+
+
+* FadeIn
+--------
+Name        : FadeIn
+Declaration : Procedure FadeIn (Step, SyncOn, DTime : byte);
+
+  This procedure fades a palette from black to color.
+
+  See FadeOut for parameter information.
+
+
+* FadeStepIn
+------------
+Name        : FadeStepIn
+Declaration : Procedure FadeStepIn (Step, SyncOn, DTime : byte);
+
+  This procedure fades the palette in one pass at a time.  This
+  allows you to slowly fade the screen within a loop.  (See DEMO.PAS)
+
+  See FadeOut for parameter information.
+
+
+* BlankPalette
+--------------
+Name        : BlankPalette
+Declaration : Procedure BlankPalette;
+
+  This procedure quickly sets all the palettes to black (thus
+  blanking the screen out).
+
+
+
+* SetRGB
+--------
+Name        : SetRGB
+Declaration : SetRGB (color, r, g, b : byte);
+
+  This procedure is used to set the RGB of a specific color.
+
+
+* ShowPcx
+---------
+Name        : ShowPCX
+Declaration : Function ShowPcx (FileName  : String; PalOptions,
+                                WhichPage : byte) : Integer;
+
+  This procedure loads a PCX image from disk.  You can load the image
+  to the screen or just load it into memory.  FileName is the name of
+  the PCX file to load.  If PalOptions is set to 0 then the palette
+  from that PCX file is loaded, if it is set to 1 then the palette
+  from the PCX file is loaded into memory, but the current palette is
+  not modified.  WhichPage determines which video page the picture is
+  displayed to.
+
+  When an image is loaded through ShowPCX it is automatically loaded
+  to page 4.  Page 4 is the background buffer for the update
+  procedure.
+
+  (See Update)
+
+  If the file loaded without problems then ShowPcx returns 0
+  otherwise:
+            -1  : is not a valid PCX file
+            -2  : the PCX is a wrong format (i.e. 16 color picture)
+                  * ShowPCX only loads 256 color 320x200 images.
+
+  If ShowPcx returns a value greater than 0 this indicated a disk
+  error (See IOResult in your Pascal manual for error descriptions).
+
+
+
+* ShowBmp
+---------
+Name        : ShowBMP
+Declaration : Function ShowBmp (FileName  : String; PalOptions,
+                                WhichPage : Byte) : Integer;
+
+  This procedure loads a BMP image from disk.  You can load the image
+  to the screen or just load it into memory.  FileName is the name of
+  the BMP file to load.  If PalOptions is set to 0 then the palette
+  from that BMP file is loaded, if it is set to 1 then the palette
+  from the BMP file is loaded into memory, but the current palette is
+  not modified.  WhichPage determines which video page the picture is
+  displayed to.
+
+  When an image is loaded through ShowBMP it is automatically loaded
+  to page 4.  Page 4 is the background buffer for the update
+  procedure.
+
+  (See Update)
+
+
+  If the file loaded without problems then ShowBmp returns 0
+  otherwise:
+            -1  : Not a valid BMP file (must be windows 3.x BMP).
+                  (Note: Cannot be in compressed format).
+
+            -2  : Possible corrupt BMP file.
+
+            -3  : Invalid image size (i.e. the image is 0x0 pixels).
+
+            -4  : Not a 256 color picture. (i.e. it's monochrome).
+                  * ShowBMP only loads 256 color 320x200 images.
+
+            -5  : BMP is compressed (must be in uncompressed format).
+
+
+  If ShowBMP returns a value greater than 0 this indicated a disk
+  error (See IOResult in your Pascal manual for error descriptions).
+
+
+* MakeBMP
+---------
+Name        : MakeBMP
+Declaration : Function MakeBMP (FileName      : string;
+                                width, height : integer) : Integer;
+
+  Saves the current page as a BMP file to disk as a Windows 3.x
+  compatible, uncompressed, 320x200x256 color bitmap.
+
+  If ShowBMP returns a value of 0 then the file was successfully
+  saved.  Otherwise there was a disk error (See IOResult in your
+  Pascal manual for error descriptions).
+
+
+
+* VGFX MOUSE ROUTINES
+=====================
+
+
+* MInit
+-------
+Name        : MInit
+Declaration : Function MInit : byte;
+
+  This function initializes the mouse driver and allows you to easily
+  incorporate mouse input via the Update procedure (See Update).
+  If MInit returns a -1 then either no mouse or driver was detected,
+  otherwise MInit returns the number of buttons on the mouse.
+
+
+* MShow
+-------
+Name        : MShow
+Declaration : Procedure MShow (visible : byte);
+
+  If visible equals 1 then the mouse is displayed, if it is set to 0
+  then the mouse is hidden.
+
+
+* MMove
+-------
+Name        : MMove
+Declaration : Procedure MMove;
+
+  The routine is used in conjunction with Update.  It reads in the
+  mouse position and moves the cursor respectively.
+
+
+* MClick
+--------
+Name        : MClick
+Declaration : Procedure MClick (which_btn : integer);
+
+  This routine reads the mouse button clicks since the last check.
+  If which_btn = 0 then button one is returned
+               = 1 then button two is returned
+               = 2 then the center button is returned (on 3 btn mice)
+
+  The button information is returned to 3 global variables.
+  BtnP - 0 if the button hasn't been pressed since last call, or the
+         number of clicks since you last checked for button clicks
+  btnX - the X position of the mouse cursor at the time of the last click
+  btnY - the Y position of the mouse cursor at the time of the last click
+
+
+* MPress
+--------
+Name        : MPress
+Declaration : Procedure MPress (Btn1, Btn2, Btn3 : Boolean);
+
+  This routine reads the mouse button state.
+  If Btn1 is true then button one is pressed
+  If Btn2 is true then button two is pressed
+  If Btn3 is true then the center button is pressed (on 3 btn mice)
+
+
+
+* SetHotSpot
+------------
+Name        : SetHotSpot
+Declaration : Procedure SetHotSpot (x, y : integer);
+
+  The procedure sets the HotSpot of the mouse.  The HotSpot is the
+  pixel position (within the cursor) that returns x and y to
+  btnX and btnY, when a button is clicked.
+
+
+* SetCursorShape
+----------------
+Name        : SetCursorShape
+Declaration : Procedure SetCursorShape (MouseData : array of byte);
+
+  This procedure makes any 16 x 16 graphic the current mouse cursor.
+  Palette position #255 is the "transparent" color.  An image can be
+  loaded from screen or disk into an array.  If you need to load an
+  image from the screen call the GetImage function.
+
+
+
+* VGFX JOYSTICK ROUTINES
+========================
+
+
+* Init_Joy
+----------
+Name        : Init_Joy
+Declaration : Functon Init_Joy : Boolean;
+
+  You need to call this procedure before you can use VGFX's joystick
+  routines.  The function returns false if the joystick was not
+  found.
+
+
+* GetJoy
+--------
+Name        : GetJoy
+Declaration : Procedure GetJoy (var Left, Right, Up, Down,
+                                    Btn1, Btn2, Btn3, Btn3 : Boolean);
+
+  This procedure returns a TRUE or FALSE to variables passed.  The
+  names of the variable describe it all.  If only a couple variable
+  are needed you will need to use a junk variable.  For example:
+
+      GetJoy (jLeft, jRight, jUp, JUNK, jBtn1, JUNK, JUNK, JUNK);
+
+
+
+* VGFX FONT ROUTINES
+====================
+
+
+* VPrint
+--------
+Name        : VPrint
+Declaration : Procedure VPrint (theText : string; x, y : integer;
+                                color, bkgrnd : byte);
+
+  This procedure prints text using the (standard) BIOS font.  It
+  prints "theText" at the specified x/y position, using the
+  color and bkgrnd (background).
+
+
+* LoadFont
+----------
+Name        : LoadFont
+Declaration : Function LoadFont (FileName : string;
+                       FontNum : longint) : Boolean;
+
+  This function loads a font from the 'fonts.bin' file.  There are
+  31 fonts in all to choose from.  The FileName should specify
+  'fonts.bin' (although there are no other bin files to choose from at
+  this time, others may be available in the future).  FontNum
+  specifies the font you want to use.  The fonts are numbered 0 to 30.
+
+  (See VGFX.INC for a listing of all the font names, which are stored
+   in a constant for your use).
+
+
+* FontStyle
+-----------
+Name        : FontStyle
+Declaration : Procedure FontStyle (Underline, Italic,
+                                   DoubleWide, DoubleHigh : Boolean);
+
+  This procedure determines which style the fonts will be printed
+  with.  If Underline is TRUE then it prints the font underlined, if
+  Italic is TRUE then it prints the font in italics, etc. etc.
+  Any number of combinations will work.  For example:
+
+  FontStyle (TRUE, FALSE, FALSE, FALSE);  --> PRINTS FONT UNDERLINED
+
+  FontStyle (TRUE, FALSE, FALSE, TRUE);   --> PRINTS FONT UNDERLINED &
+                                              DOUBLEHIGH
+
+  FontStyle (FALSE, TRUE, TRUE, FALSE)    --> PRINTS FONT IN ITALICS &
+                                              DOUBLEWIDE
+
+
+
+* FontPrint
+-----------
+Name        : FontPrint
+Declaration : Procedure FontPrint (theText : string; x, y : integer;
+                                   color   : byte);
+
+  The procedure prints a font to the screen, using the specified font
+  (see LoadFont) in the specified style (see FontStyle).  It prints
+  "theText" at the x/y parameters in the specified color.
+
+  * A NOTE ABOUT FONTS:
+    Although we have provided you with 31 built in fonts, you may have
+    need for a font that isn't there.  It is possible to generate a
+    font as an image (i.e. draw a font in a graphics program) and
+    save it as a PCX file.  You can then load that image using ShowPCX
+    and grab the fonts using GetImage.  A type could be created to
+    hold the font data.
+
+    Type
+        FChar  = array[1..20, 1..16] of byte; { HOLDS EACH CHARACTER }
+        MyFont = record
+               { ARRAY POSITIONS CORRESPOND TO THEIR ASCII VALUES }
+               Letters : array[0..255] of FChar;
+        end;  { record }
+
+    Var
+       { YOU WILL WANT TO ALLOCATE THE SPACE ON HEAP! }
+       CoolFont : ^MyFont;
+
+
+    { - - - - - - }
+    Procedure DrawMyFont (theText : string; x, y : integer; color : byte);
+    var
+       tmp     : byte;
+
+    Begin
+         for tmp := 1 to length(theText) do
+         begin
+              PutImage (CoolFont.Letters[ord(theText[tmp])]^, x, y, color);
+
+              { SIZE OF CHAR IN PIXELS IS 20 WIDE }
+              x := x + 22;
+         end;  { for\do }
+    End;  { Procedure }
+
+    { = = = = = = }
+    Begin
+      { INIT THE GRAPHICS MODE, LOAD THE IMAGE, GRAB YOUR NEW FONT! }
+
+      DrawMyFont ('Hello', 100, 100, 09);
+    End;
+
+
+    This code is basically what you would need for creating user
+    defined fonts.  I have not checked for optimizations and have not
+    tested the code, but it seems straight forward enough!
+
+
+
+* VGFX SOUND ROUTINES
+=====================
+
+
+* SB_Init
+---------
+Name        : SB_Init
+Declaration : Function SB_Init (IRQ, DMAChannel : byte;
+                                         BaseIO : word) : Boolean;
+
+  Initializes the SoundBlaster VOiCe playing engine & soundcard.
+  This routine needs to be called only once at the begining of your
+  program to use the VOC playing routines, if you do not want sound
+  support, then simply don't call this function.  "IRQ" is the
+  soundcard's IRQ number.  "DMA" is the DMA channel of the soundcard
+  and "BaseIO" is the baseport address of the soundcard.  This function
+  returns a TRUE if all was successful, FALSE if there was no sound
+  card, or someother error.
+
+  * NOTE:  This routine first checks for the "BLASTER" environment
+           variable.  If it finds this, the routine will attempt to
+           use those settings to initialize the soundcard.  If that
+           should fail, then it will attempt to use the parameters
+           you pass.
+
+
+* LoadVoc
+---------
+Name        : LoadVoc
+Declaration : Function LoadVoc (vocname : string) : Boolean;
+
+  This routine loads a VOC file into memory for play.  "vocname"
+  is the filename of the VOC file to play.  If memory could not be
+  allocated or the soundcard was not initialized properly with
+  SB_Init then this routine will return a FALSE.  Otherwise it
+  will return TRUE.
+
+  * NOTE:  These routines support 1-44khz sampling rates.  But
+           they do not support 16-bit or stereo as of yet.
+           (Also, the highest sampling rate you can use is determined
+            by the soundcard installed in the system.  For example, if
+            you have a SoundBlaster 16 then you can play upto 44khz
+            files, but if you have a regular SoundBlaster than you can
+            only play upto 11khz files)
+
+
+* PlayVoc
+---------
+Name        : PlayVoc
+Declaration : Procedure PlayVoc;
+
+  This plays the currently loaded VOC file.  If you use PlayVoc after
+  a VOC has been "paused", then it will start playing the VOC from the
+  the beginning of the file.
+
+  (See LoadVoc)
+
+
+
+* PauseVoc
+---------
+Name        : PauseVoc
+Declaration : Procedure PauseVoc;
+
+  This procedure pauses the VOC that is currently being played.  If
+  you call PlayVoc after a VOC has been paused, then it will start
+  playing from the beginning of that VOC.  If you call ResumeVoc then
+  the VOC will start playing from the position that it was paused at.
+
+
+* ResumeVoc
+-----------
+Name        : ResumeVoc
+Declaration : Procedure ResumeVoc
+
+  This procedure is used after you call PauseVoc;  Calling ResumeVoc
+  will start playing the VOC from the position that it was paused at.
+
+
+* LoopVoc
+---------
+Name        : LoopVoc
+Declaration : Procedure LoopVoc (LoopV : Boolean; Wait : LongInt);
+
+  When LoopV is set to TRUE, then the currently loaded VOC will play
+  continually, looping back around as it reaches the end of the file.
+  The looping is transparent to the programmer.  To disable looping
+  just set LoopV to FALSE.  "Wait" is the period to wait before
+  starting the song over again, it is measured in "clock ticks".
+  Clock ticks happen every 18.2 times a second, so for example,
+  to delay the song repeat by 2 seconds you'd specify a value of
+  "36".
+
+  * NOTE:  If your program is timing-sensitive then you may want
+           to leave VOC looping off, as it chains an interrupt
+           to monitor the VOC status and restart the loop.
+           Also, VOC looping works outside of you program as
+           well, like, for instance; in a DOS shell, if you
+           do not call LoopVOC(false,0) before shelling then
+           the sound will continue to play & loop!
+
+
+* IsVocPlaying
+--------------
+Name        : IsVocPlaying
+Declaration : Function IsVocPlaying : Boolean;
+
+  This function simply returns TRUE if a VOC is currently playing and
+  FALSE is there is no VOC playing.
+
+
+
+* VGFX GLIB ROUTINES
+====================
+
+
+* SetWorkLib
+------------
+Name        : SetWorkLib
+Declaration : Function SetWorkLib(LibName : String) : Boolean;
+
+  This function sets the "library" for the VGFX routines to use.
+  All of VGFX's routines support this "library" mode.  "LibName"
+  is the name of the GLIB library to use, passing a null will
+  disable library usage and return to regular disk access.
+  SetWorkLib will return a TRUE if all was successful, otherwise
+  FALSE will be returned.  (FALSE usually means file not found)
+
+  Please see 'Appendix A' for more information about these features.
+
+
+* LoadLib
+---------
+Name        : LoadLib
+Declaration : Function LoadLib(FileName : String; var Data; SeekPos : LongInt;
+                               Bytes    : Word;) : Word;
+
+  This function loads data from a file stored in a library.
+  "FileName" is the name of the file within the library to load the
+  data from.  "Data" is any variable in which to put the loaded data
+  into.  "SeekPos" is the position in the file (the file within the
+  library) at which to begin loading, you can use "SeekPos" to seek to
+  any given position in the file. "Bytes" is the number of bytes to load
+  in from that file.  LoadLib returns a word value, it contains the actual
+  bytes read in, if set to 0 than an error occured.
+
+  (See SetWorkLib and Appendix A)
+
+
+
+* VGFX EMS ROUTINES
+===================
+
+
+* EMS_Init
+----------
+Name        : EMS_Init
+Declaration : Function EMS_Init : Word;
+
+  Initializes the EMS driver & routines.  This must be called before you
+  can use the EMS routines, if not your system will hang.  EMS_Init
+  returns the EMS driver version, 0 if no driver was installed/found
+  or an error occured.  (The error code is held in EMSResult)
+
+ > EMS1.PAS and EMSDEMO.PAS are example programs which use the EMS routines. <
+
+  * NOTE:  These routines work with a LIM EMS v3.00 or later EMS driver.
+
+
+* EMSPage
+---------
+Name        : EMSPage
+Declaration : Function EMSPage( Page : byte ) : BytePtr;
+
+  This function returns a pointer to the physcial page specified.
+  ("Page" is 0-3 in range, for a total of 4 pages)
+
+  (See Appendix B for more information on EMS; Also see EMSPageOfs)
+
+
+* EMSPageOfs
+------------
+Name        : EMSPageOfs
+Declaration : Procedure EMSPageOfs( Offset : word );
+
+  This function sets the offset in the page for EMSPage to begin
+  at, thus making EMSPage return a pointer at the offset in the physcial
+  page.  See EMSDEMO2.PAS for example code.
+
+  (See Appendix B for more information on EMS)
+
+
+* EMSAlloc
+----------
+Name        : EMSAlloc
+Declaration : Function EMSAlloc( Pages : integer ) : integer;
+
+  This function allocates EMS pages for use.  "Pages" is the number
+  of pages you want to allocate for you program's use.  (Each page
+  contains 16384 bytes worth of data space).  EMSAlloc returns an
+  integer "handle", this handle is used from now on as a reference
+  to these pages you just allocated.  If EMSAlloc returns $FFFF then
+  an error occurred during the allocation process, the error code is
+  held in EMSResult, see Appendix B for more description on EMSResult.
+
+
+
+* EMSFree
+---------
+Name        : EMSFree
+Declaration : Function EMSFree(Handle : integer) : boolean;
+
+  Frees EMS pages allocated by EMSAlloc.  You must free the pages before
+  your program exits or no other program will be able to use the memory.
+  "Handle" is the handle passed by EMSAlloc.  EMSFree will return TRUE
+  if the memory was released, FALSE if there was a problem.
+
+  (The error code is held in EMSResult)
+
+
+* EMSMap
+--------
+Name        : EMSMap
+Declaration : Function EMSMap(Handle, LogP : integer; PhysP : byte) : boolean;
+
+  EMSMap is used to map the logical allocated pages with the physical
+  pages stored in the EMS page frame.  What this does is assigns the
+  pages outside of the page frame into the frame for use by your program.
+  "Handle" is the handle returned by EMSAlloc.  "LogP" is the logical page
+  (0-the # of pages you allocated with EMSAlloc).  "PhysP" is the physical
+  page in the EMS page frame.  (0-3 for a total of 4 pages at any given
+  time).  This function returns TRUE if the memory was mapped correctly,
+  FALSE if there was an error.
+
+  (The error code is held in EMSResult)
+
+
+* EMSSaveMap
+---------------
+Name        : EMSSaveMap
+Declaration : Function EMSSaveMap( Handle : integer ) : boolean;
+
+  Saves an EMS map.  "Handle" is the handle returned by EMSAlloc.
+  This saves the current EMS page frame, to be restore to normal,
+  later on by EMSRestoreMap.  This function returns TRUE if the map
+  was restored, FALSE if there was an error.
+
+  (The error code is held in EMSResult)
+
+
+* EMSRestoreMap
+---------------
+Name        : EMSRestoreMap
+Declaration : Function EMSRestoreMap( Handle : integer ) : boolean;
+
+  Restores a saved EMS map.  "Handle" is the handle returned by
+  EMSAlloc.  This function returns TRUE if the map was restored,
+  FALSE if there was an error.
+
+  (The error code is held in EMSResult; See also EMSSaveMap)
+
+
+
+* EMSPages
+----------
+Name        : EMSPages
+Declaration : Function EMSPages : integer;
+
+  This function returns the total amout of EMS pages that the EMS
+  driver had allocated.  (Not the free available pages to your
+  program, see below)
+
+
+* EMSFreePages
+--------------
+Name        : EMSFreePages
+Declaration : Function EMSFreePages : integer;
+
+  This function returns the total amount of free EMS pages. (meaning
+  these pages are available NOW for your program to use).
+
+
+* MkPtr
+--------------
+Name        : MkPtr
+Declaration : Function MkPtr (var variable) : Pointer;
+
+  This function creates a pointer to the specified variable.  I added
+  this routine for convenience, it is just "ptr(seg(xx),ofs(xx))" being
+  returned via this function, but it makes creating and using pointers
+  easier.  See EMS1.PAS for an example on how to use it.
+
+
+
+
+* VGFX MISC. ROUTINES
+=====================
+
+
+* Int2Str
+---------
+Name        : Int2Str
+Declaration : Function Int2Str (Num : LongInt) : String;
+
+  This function converts and integer value into a string and then
+  returns the string.
+
+
+* Exist
+-------
+Name        : Exist
+Declaration : Function Exist (FileName : string) : boolean;
+
+  This function checks to see if a file exists or not.  "FileName"
+  is the filename/path of the file you want to check for.  Example:
+
+     if (Exist('C:\VGFX\VGFX.TPU')) then
+        writeln('You have VGFX!');
+
+
+* GetBit
+--------
+Name        : GetBit
+Declaration : Function GetBit (Bytes : byte; Bit : byte) : boolean;
+
+  This function Checks to see if the specified bit is set to true.
+  "Bytes" is the value you want to test for bit settings. "Bit" is
+  a range from 0 to 7 (7 is bit 8) of the bit you want to check.
+  GetBit will return a TRUE if the bit is set, FALSE if not.
+
+
+* BitSet
+--------
+Name        : BitSet
+Declaration : Function BitSet (n     : byte; bit : byte;
+                               state : boolean) : byte;
+
+  Sets or releases a specific bit in a byte.  "n" is the byte
+  to pass.  "bit" is the bit to set/release (0-7).  "state" is
+  the state of the bit (TRUE=ON (1), FALSE=OFF (0)).
+
+
+* StrUpCase
+-------
+Name        : StrUpCase
+Declaration : Function StrUpCase (St : string) : string;
+
+  This function converts "St" to all capital letters and then is
+  returned.
+
+
+
+* StrLCase
+-------
+Name        : StrLCase
+Declaration : Function StrLCase (st : string) : string;
+
+  This function converts "St" to all lowercase letters and then is
+  returned.
+
+
+* CopyFile
+----------
+Name        : CopyFile
+Declaration : Function CopyFile (infile, outfile : string) : boolean;
+
+  Copies files from source to dest.  "source" is the source filename
+  and "dest" is the destination filename.  Example:
+
+     CopyFile ("C:\TEST1.EXE", "D:\TEMP\TEST1.EXE");
+
+  This function returns TRUE if the file was copied, FALSE if not.
+  (You can use IOResult to see the specific error, see your Pascal
+   manual.)
+
+
+* SubExist
+----------
+Name        : SubExist
+Declaration : Function SubExist (pathname : string) : boolean;
+
+  Checks to see if a subdirectory on the drive exists or not,
+  "pathname" is the path including drive letter (i.e.- "C:\TEMP").
+  This function will return TRUE if the directory is found FALSE
+  if not.
+
+
+* FlushKB
+---------
+Name        : FlushKB
+Declaration : Procedure FlushKB;
+
+  Flushes the keyboard buffer.  Empty's out any waiting characters.
+
+
+
+
+* APPENDIX A:  GLIB Utility
+===========================
+
+What is GLIB??  GLIB is a "LIB" utility that allows you to store all
+kinds of files together in one massive database (refered to as 'library'
+from here-in).  GLIB's command line arguments are almost identical to
+those of any standard "LIB" utility.  These libraries can only be created/
+modified by the GLIB utility, but files within these libraries are
+accessed via VGFX's routines like LoadVOC, ShowBMP, ShowPCX, etc. or they
+can be accessed via the 'LoadLib' function.  LoadLib allows you to load
+any amount of data from any position within the file contained in the lib.
+
+Now, to create a library you need to use the GLIB utility included with
+your VGFX package, this utility takes the following command-line arguments:
+
+     GLIB Libname [options][File1] [File2] [File3..]
+
+If you run GLIB with just the name of a library it will list the contents of
+the library file to the screen with "more" prompts.  Options are as follows:
+
+ -+      Update; Updates a file that already exists in the library,
+                 this function is useful for updating modifications
+                 to certain files contained within the library.
+
+ *      Extract; Extracts a COPY of a file contained in the library to
+                 disk.  This function will NOT REMOVE a file from the
+                 library, it only extracts a COPY of the file to disk.
+
+ -       Remove; Remove deletes a copy of a file contained in the library.
+                 This function does not make a copy on disk before removing
+                 the file from the library, so make sure you have a copy
+                 already if you want to save it!  Once you call this
+                 option it will remove all the files specified on the cmd-
+                 line.
+
+ +   Add/Create; Add will add files to a library or create a library if
+                 there is no existing library already.
+
+
+* Tech stuff:
+GLIB limitations..  GLIB is limited to no more than 65535 files at any one
+                    time in a library, also the total file size of a library
+                    must not exceed 2.1gb
+
+
+Well I hope that clears up any confusion on what GLIB is, I'm sure I left out
+something...  Anyways, see GLIB1.PAS for an example on how to use GLIB in/with
+VGFX.
+
+
+
+* APPENDIX B:  More on EMS
+==========================
+
+Ok, EMS memory... hmm, this outta be a tough one.  EMS memory works like
+this:  You have the EMS "pages" in memory (pages are 16384 byte (16k)
+blocks of memory, the driver refers to them as pages).  You can allocate
+as many pages as the driver will allow for your programs usage.  EMS drivers
+keep a thing called a "page-frame" or "map" in conventional memory, this map
+contains four (numbered 0-3) pages in it (totaling for 64k), these are called
+physical pages.  Logical pages are the other pages outside of conventional
+memory.  (when you call EMSAlloc you are allocating logical pages)  In order
+to access your allocated Logical pages you must move them into the EMS "page-
+frame".  Doing this is called "mapping" (this is where it gets tricky :) )
+What you want to do is keep the most used pages in the page-frame all the time
+that way access will be fastest.  You can map your pages via the EMSMap
+function in your EMS unit.  Now remember that in order to use the pages you
+allocate you must move them into the page-frame.  Here is an example:
+
+  handle := EMSAlloc(1);  { Get 1 page (remember your pages are numbered from
+                            0 - maxpage, so allocating this one page makes it
+                            logical page number 0!}
+  EMSMap(handle, 0, 0);   { the first arg is the handle returned by EMSAlloc
+                            the second arg is the logical page to assign
+                            and the third arg is the physical page to assign
+                            that logical page to. }
+
+Now that we've done that, our logical page we allocated is now available in
+the page-frame under physical page 0 for access.  Whew!  Well thats about
+as in-depth as I can go into EMS today, but I hope this helped!
+
