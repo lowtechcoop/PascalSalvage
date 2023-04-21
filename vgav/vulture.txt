@@ -1,0 +1,162 @@
+
+      ÕÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ»
+      ³ş                                                            ş º
+      ³                                                               º
+      ³  ÛÛÛÛÛÛÛÛÛ°                   ÛÛ°                             º
+      ³  ÛÛ°    ÛÛ° ÛÛ°   ÛÛ° ÛÛÛÛÛÛ° ÛÛ°     ÛÛÛÛÛÛÛÛ° ÛÛ°     ÛÛ°   º
+      ³  ÛÛ°    ÛÛ° ÛÛ°   ÛÛ°   ÛÛ°   ÛÛ°     ÛÛ°   ÛÛ° ÛÛ°     ÛÛ°   º
+      ³  ÛÛ°    ÛÛ° ÛÛ°   ÛÛ°   ÛÛ°   ÛÛ°     ÛÛÛÛÛÛÛÛ° ÛÛ°     ÛÛ°   º
+      ³  ÛÛ°    ÛÛ° ÛÛ°   ÛÛ°   ÛÛ°   ÛÛ°     ÛÛ°   ÛÛ° ÛÛ° ÛÛ° ÛÛ°   º
+      ³  ÛÛÛÛÛÛÛÛÛ° ÛÛÛÛÛÛÛÛ°   ÛÛ°   ÛÛÛÛÛÛ° ÛÛ°   ÛÛ°  ÛÛÛ° ÛÛÛ°    º
+      ³                                                               º
+      ³                        T ù R ù I ù A ù D                      º
+      ³ş                                                            ş º
+      ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ½
+                               ÉÍÍÍÍÍÍÍÍÍÍÍÍÍÍ»
+                               º ù PRESENTS ù º
+                               ÈÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼
+
+                       3D-ROTATIONS in PASCAL/ASSEMBLER
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+ Code By      : Vulture                  Total Files  : 4
+ File Type    : 3d rotation source       Release Date : 1th of August 1995
+ Difficulty   : Medium level             Filename     : VGA-VUL3.ZIP
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+Hello there and welcome to yet another release from Outlaw Triad. This one
+is a trainer on 3d. I must say that there are a LOT of trainers and sources
+available already on this subject. But again, it never hurts to study more
+than just a few of them, right? Ok, as always I started to code & write this
+stuff primarily for myself. And then decided to release it... why not? ;)
+
+Hmm, I am not about to go and explain every little detail there is to tell
+about 3d. Mainly because even I don't know everything ;) and secondly, the
+source provided here says it all! Just go and study it. It really is basic!
+What I will cover here is the main stuff, not the code itself. Let's go...
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+A. SCHEDULE FOR 3D ROTATIONS.
+
+Ok, first of all we need to have a (co)sine chart. That's because we need
+(co)sine values in our rotations formula. This brings me to the first little
+trick I did in the source. I have made all the (co)sine values to be integers!
+The reason I did this, is because our actual rotation is done in assembler.
+Hee, why don't you alter the code and see what kind of (co)sine values you
+get. It helps you to understand what you are doing. (at least it helped me:)
+
+We also need (ofcourse) some basic elements like PutPixel, WaitRetrace procs
+and stuff like that. All provided in the source.
+
+Fine, now what we need are some procedures to help us rotate the 3d-points.
+Here's how I did it...
+
+First I alter the degrees to rotate around. I did this by simply adding a
+certain increase-factor to the degree variable. Simple! But... if the degree
+is larger then 256 we have a problem. Because our (co)sine chart only goes
+up to 256 values (0..255). Take a look at the source and you will find a
+Mod 256 in the procedure. So we don't get above our 256 anymore!
+
+Secondly what we need are the sine & cosine of the degrees we rotate around.
+That's the (co)sine of x,y,z. Well, simply get them from the (co)sine chart
+we have created. Put the values into seperate variables so we can use them
+in our rotation procedure. Btw, to get a cosine value from a sine-chart, we
+simply add 64 to the degree. Examine the source to see what I mean.
+
+Ok, now we have set the degrees to rotate around and grabbed the (co)sine
+values that come with those degrees. The next step is the actual rotation.
+For this we need the original values of the 3d-point. You can grab them using
+a seperate procedure, like I did. Also we need the following formulas to do
+the actual rotating of the 3d-point:
+
+Rotate around x-axis
+YT = Y * COS(xang) - Z * SIN(xang) / 256
+ZT = Y * SIN(xang) + Z * COS(xang) / 256
+Y = YT
+Z = ZT
+
+Rotate around y-axis
+XT = X * COS(yang) - Z * SIN(yang) / 256
+ZT = X * SIN(yang) + Z * COS(yang) / 256
+X = XT
+Z = ZT
+
+Rotate around z-axis
+XT = X * COS(zang) - Y * SIN(zang) / 256
+YT = X * SIN(zang) + Y * COS(zang) / 256
+X = XT
+Y = YT
+
+That's it! Because we have stored the needed values (like (co)sine and x,y,z)
+in seperate variables, we can do the rotation in assembler. Just like I did
+in the source. Go and watch for yarselve. It shouldn't be hard to understand
+even when you don't have much experience coding asm. Uhm, I must add that we
+divide by 256 coz we have multiplied our (co)sine values with 256 too.
+
+Ok, great! Now we have rotated the point. But we still see nothing on the
+screen. For this we use other formulas. Bad luck for those of you who HATE
+maths (like I do). Anyway, here they are...
+
+Xoff*X / Z+Zoff = Screen x
+
+Yoff*Y / Z+Zoff = Screen y
+
+The Zoff is the distance from the viewer. I choose Xoff and Yoff to be 256
+but go try some other figures. It's fun to see what happens.
+
+Well, now we have rotated a 3d-point and shown it on the screen. The final
+step could be a rotating box, like in the example program. Or, when you put a
+little effort to it, you can make all kinds of complicated objects. Use your
+imagination. You can also use polygons instead of just lines. Then you get
+filled squares. Maybe something for a next Outlaw release? We'll see...
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+B. CLOSING WORDS
+
+The way you handle 3d-rotations is ofcourse totally up to you. There are many
+different ways of doing it and I only showed you one of them... Goodluck!
+Keep in mind that what you have here (the source) is certainly not the best
+way to do 3d. It can be made faster by implementing more assembler code. The
+rotation itself might not be the best way and the way the object is deleted
+can be improved also. It might not even work properly on slow machines (like
+386sx?). Anyway, the source was meant to act like an example and if you work
+on it a bit, you are most likely to find a way to improve it. Sorry if this
+small textfile was a bit short but I just don't feel like explaining every
+little thing about 3d. Like I said before, the source should be enough for
+now. But if you don't understand it, don't feel bad about it. Take it one
+step at the time. I myself spend hours to figure it all out and it still
+ain't perfect (and it never will be:). I do hope this stuff has helped you
+on the way in the world of 3d. It certainly helped me...
+
+Hmm, Outlaw is looking for a good gfx artist. If yar interested in creating
+cewl things on the PC contact us at our distros. Or email: comma400@tem.nhl.nl
+Don't hesitate to contact us, coz we like to chat with otha scene people... :)
+
+
+    Be seeing ya...
+
+           Signed:    Vulture / Outlaw Triad
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+ Outlaw Triad Distros :  ³  Greetz from Outlaw:  ³  Releases sofar:
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+                         ³                       ³
+ ş    Blue Thunder   ş   ³   - DemoLisher        ³   ş MESSAGE  (dosscroller)
+ ş +31 (0)36-5346967 ş   ³   - ThunderHawk       ³
+                         ³   - Ash               ³   ş VGA-VUL1 (sources)
+                         ³   - The Machine       ³
+ ş     FireHouse     ş   ³   - XùNùTRiC          ³   ş CHAINDOC (textfile)
+ ş +31 (0)58-2661590 ş   ³   - Utter Chaos       ³
+                         ³   - Crusher           ³   ş VGA-VUL2 (sources)
+                         ³                       ³
+                         ³   - Critical          ³   ş BASICDOC (textfile)
+     Open for more!      ³   - Da Frisian Force  ³
+                         ³   - Tribal            ³   ş VGA-VUL3 (sources)
+                         ³                       ³
+                         ³                       ³   + various bbs-adds
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+                   ş (C) 1995  OùUùTùLùAùW   TùRùIùAùD ş
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ

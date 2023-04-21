@@ -1,0 +1,168 @@
+
+      ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ·
+      ³ş                                                            ş º
+      ³                                                               º
+      ³  ÛÛÛÛÛÛÛÛÛ°                   ÛÛ°                             º
+      ³  ÛÛ°    ÛÛ° ÛÛ°   ÛÛ° ÛÛÛÛÛÛ° ÛÛ°     ÛÛÛÛÛÛÛÛ° ÛÛ°     ÛÛ°   º
+      ³  ÛÛ°    ÛÛ° ÛÛ°   ÛÛ°   ÛÛ°   ÛÛ°     ÛÛ°   ÛÛ° ÛÛ°     ÛÛ°   º
+      ³  ÛÛ°    ÛÛ° ÛÛ°   ÛÛ°   ÛÛ°   ÛÛ°     ÛÛÛÛÛÛÛÛ° ÛÛ°     ÛÛ°   º
+      ³  ÛÛ°    ÛÛ° ÛÛ°   ÛÛ°   ÛÛ°   ÛÛ°     ÛÛ°   ÛÛ° ÛÛ° ÛÛ° ÛÛ°   º
+      ³  ÛÛÛÛÛÛÛÛÛ° ÛÛÛÛÛÛÛÛ°   ÛÛ°   ÛÛÛÛÛÛ° ÛÛ°   ÛÛ°  ÛÛÛ° ÛÛÛ°    º
+      ³                                                               º
+      ³                        T ù R ù I ù A ù D                      º
+      ³ş                                                            ş º
+      ÔÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼
+                               ÉÍÍÍÍÍÍÍÍÍÍÍÍÍÍ»
+                               º ù PRESENTS ù º
+                               ÈÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼
+
+                        3D-ROTATIONS in 100% ASSEMBLER
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+ Code By      : Vulture                  Total Files  : 5
+ File Type    : 3d rotation source       Release Date : 10th of September '95
+ Difficulty   : Medium level             Filename     : VGA-VUL4.ARJ
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+ Hello there. This is Vulture typing this little textfile. Yeah, uhm, well,
+ some of you might be confused since Outlaw Triad already released sources
+ covering 3d-rotations (VGA-VUL3). But, that source was coded in pascal
+ with some built-in assember and because a lotta people out there are more
+ interested in pure 100% asm, I thought it might be a good idea to release
+ my own little asm source-code covering 3d. This source was coded in IDEAL
+ mode. I'll assume basic knowledge of vga-coding, assembler and Pascal.
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+ Hmm, I am not gonna explain 3d-rotations in detail coz there are already
+ lotsa sources and explanations available. If you have a little experience
+ coding asm, you won't have too much trouble understanding the sourcecode.
+ In this textfile I'm just gonna provide you with the formulas needed to
+ rotate a point. These formulas use sine & cosine values. I will show you
+ how to create a sine-chart in Pascal. Also, when you have rotated a point,
+ you will need some formulas to display the point on the screen.
+ These formulas are also provided. Here they come:
+
+ To rotate a point, use this:
+
+ Rotate around x-axis
+ YT = Y * COS(xang) - Z * SIN(xang) / 256
+ ZT = Y * SIN(xang) + Z * COS(xang) / 256
+ Y = YT
+ Z = ZT
+
+ Rotate around y-axis
+ XT = X * COS(yang) - Z * SIN(yang) / 256
+ ZT = X * SIN(yang) + Z * COS(yang) / 256
+ X = XT
+ Z = ZT
+
+ Rotate around z-axis
+ XT = X * COS(zang) - Y * SIN(zang) / 256
+ YT = X * SIN(zang) + Y * COS(zang) / 256
+ X = XT
+ Y = YT
+
+ Well, that's it. To see how you can rotate a point in assembler, examine
+ the source. It should not be that hard to understand. One thing that might
+ be a little confusing is the way the sine and cosine values are calculated.
+ Here's how I did it. I used a simple pascal procedure to calculate my sine
+ values. Here it comes:
+
+ Procedure CalcSine;
+ Var I,Out: Integer;
+     An: Real;
+ Begin
+   For I := 0 to 255 Do                { 256 values }
+   Begin
+     An := I*(2*pi / 256);             { 2*pi coz of radians! }
+     Out := Round(Sin(An)*256);
+     Sine[I] := Out;                   { Save into array }
+   End;
+ End;
+
+ Notice that this particular procedure saves the values into an array. What
+ you must do is change it so it saves the values to a file instead of an
+ array. The close reader might already have guessed that all values here
+ are integers. All values are multiplied with 256 and then rounded to an
+ integer value. In our rotation formulas you will see a divide by 256.
+ Should make perfect sense, shouldn't it? ;) I mean, 256 perfectly fits
+ into a byte. So we can use some fast asm-code in our rotationsource.
+ (sar=>see the source)
+ So, now you have a few sine-values. But, in the formula you also need
+ cosine-values. And those are not provided in this code, you might say...
+ Wrong! They are there. What you must do is add 64 to the degree to get
+ the cosine. Here's a little example:
+
+ Suppose you have the degree 195.
+ To get the (co)sine-values out of the array, you would do this (in pascal):
+   SineValue := Sine[(195) Mod 256];      { Sine is the name of the array }
+   CosineValue := Sine[(195+64) Mod 256];
+ The degree value musn't get larger than 255. That's why we use a 'mod 256'
+ in our code. Take a look at the source to see how this is done in assembler.
+
+ Ok, when you have rotated the point, you would like to put it on the screen
+ somehow, right? ;-) Well, you could use these formulas to do that:
+
+ Xoff*X / Z+Zoff = Screen x
+ Yoff*Y / Z+Zoff = Screen y
+
+ The Xoff & Yoff values are 256. But go and change them. It's fun!
+ The X,Y,Z values are those of the current 3d-point you are busy with.
+ Zoff is the distance to the viewer (howfar the object is away).
+ A large Zoff will produce just a small object (it's futher away) while
+ a small Zoff makes a big object. Zoff should not reach 0 coz then you
+ will get the strangest comments... "divide by zero" ... Weird huh? ;-)
+ But seriously, in the example Zoff is 300 but go change it and see
+ what happens. Best way to learn something is by trial and error.
+ Btw, I assume Screen x and Screen y don't need any explanation.
+
+ Ok, that's all there is to it. Don't worry if you don't understand
+ any of it now. Just go and study this and other sources floating
+ around and you'll get the hang of it eventually.
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+ As always this source is not the best way to do 3d-rotations. It was
+ provided to help you on your way in the art of demo-coding. When you
+ have a little experience coding asm/vga, the source should not be
+ that hard to understand. Go and make some improvements on it.
+ Hint: try to insert a look-up table with all y-line offsets in it.
+ Hmm, but if you are a beginner vga-coder, I suggest you try some
+ simpler things instead. It's hard enough as it is...
+ Goodluck to ya and if ya make something nice with this code, please
+ let me know about it. I'm very interested!
+
+ Btw, as always I'll take no responsibility if this code should damage
+ your computer, house, cat or sumthing. I've had no problems with it
+ and this code is free so go figure.
+
+    Be seeing ya...
+
+           Signed:    Vulture / Outlaw Triad
+
+
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+ Outlaw Triad Distros :  ³  Greetz from Outlaw:  ³  Releases sofar:
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+                         ³                       ³
+ ş      The Force    ş   ³   - DemoLisher        ³   ş MESSAGE  (dosscroller)
+ ş +31 (0)36-5346967 ş   ³   - ThunderHawk       ³
+                         ³   - Ash               ³   ş VGA-VUL1 (sources)
+                         ³   - Trooper           ³
+ ş     FireHouse     ş   ³   - Rudeboy           ³   ş CHAINDOC (textfile)
+ ş +31 (0)58-2661590 ş   ³   - Utter Chaos       ³
+                         ³   - Crusher           ³   ş VGA-VUL2 (sources)
+                         ³                       ³
+ ş   Blue Nose Prod  ş   ³   - Critical          ³   ş BASICDOC (textfile)
+ ş +31 (0)345-619401 ş   ³   - Da Frisian Force  ³
+                         ³   - Tribal            ³   ş VGA-VUL3 (sources)
+                         ³   - Nailbomb          ³
+                         ³                       ³   ş VGA-VUL4 (sources)
+     open for more!      ³   & all forgotten!    ³
+                         ³                       ³   + various bbs-intros
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
+
+                   ş (C) 1995  OùUùTùLùAùW   TùRùIùAùD ş
+
+ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ
