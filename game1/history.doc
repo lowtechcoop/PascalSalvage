@@ -1,0 +1,165 @@
+Versions:
+6.1
+  Added mixture of tasker pause and loop cycles in Ripdetect and read char
+  to give a smoother response.
+
+6.2
+  Missed Done Routine in 6.1  - now doesn't close if local or X00extOK
+  but buffered flag is set to true.
+  There was a file being written to when door timed out.  Some OS2 systems
+  complained of endless pages being written to their disk.  I'm taking this
+  out this version.  So if you have a use for it save it and put it back in.
+
+6.3
+  Added back in the DisplayFile procedure. Turns out a lot of you are using
+  this file so I'm putting it back in. Added /C to specify comport on
+  command line.  Dropfile comport number will override this option.
+
+6.4
+ Cleaned up the multi-tasker routines to allow easier flag passage to other
+ units. Added SpeedRead which can be used in other units for a timed input
+ response loop or propeller.
+
+6.5
+ Added /V command line parm that to turn local video off (actually to statback
+ color).  Purge fossil buffer added to XFossil initialization.
+ Added /W flag.  This just differentiates between straight dos systems and
+ those without multitaskers running on novell or other network. This is so
+ our tasker checker can give up time slices or just delay. Which is important
+ only when using the delay in waiting for file locks to unlock.
+
+6.6
+ Added /M command for multi ctl file handling. This will be released around
+ the time of the DDSetup Universal door setup program.
+ (Remember for this to function make your control/config file name less than
+  7 characters in length). Lasted less then a week. Fixes and new things
+  in this version:
+
+ New Things and Fixes by Steven R. Lorenz    11.18.94
+
+1. IRQs 0-15 now supported.  Comports 1-4 supported.  Required change in
+   ASYNC.asm (called SLASYNC here).
+   Selectable Port Addresses added to .CTL file so sysop doesn't have to
+   have a bunch of if 'nodex == 1 goto xxx' in his doorx.bat.
+2. DV aware routines. Use examples as guide to installation.
+   a. DV_Pause added to sreadch to make DV work more smoothly.
+3. High speed BBS modem vs lowspeed user modem problem of lost characters -
+   (basically RTS/CTS checking) -  Fixed
+4. Carrierdetect during sendchar. Fixed
+5. Rip detect.  Or WC3.9 or PCBoard15.0 dropfile driven.
+6. Fast and correct ansi color routines.
+7. PCBoard 15 support
+8. Rip Detect or found on WC3.9+ or PCB15 dropfiles
+9. TriBBS dropfile support  (untested)
+10.RBBS vs Super BBS Dorinfo types supported
+11.Lock baud and comm baud rates to 115,200
+12.Windows,WindowsNT,OS/2,DOS 5.0+ time slice releasing.
+   A Dos,Win, DV pause is taken after so many read cycles in read loop
+13.fossil support to 38,400 using normal fossil calls.
+   fossil support to 115,200 using X00 extended fossil calls.
+   Use XFossil for any fossils (X00 or BNU) over 38,400.  This option does
+   not open or close the fossil but meerly writes to it the way it is.
+14.No-local video mode can save processing in multitasking windows or to
+   give some user privacy when competing in game against the sysop.
+15.Multiple control files can now be accessed by a command line parm.
+
+6.7
+ The current package with greatly expanded documentation and many additional
+ items to include the new DDPlus setup program.
+
+7.0 - A Major new version:
+ 1.  Completely revised the DDPLUS.DOC to make it easier to understand and
+     more helpful.
+ 2.  Added a file/Record locking unit so you can make on-line multi-user
+      and multi-node doors.
+ 3.  Added an Inter-BBS unit so you can make your doors inter-bbs capable.
+ 4.  Added RipLink to display RIP graphics on the local sysops screen. 
+ 5.  Added new commands and procedures to the DDPLUS.PAS unit.
+ 6.  Revised and updated the overlay unit.
+ 7.  Added the original Scott Baker ANSIMENU unit back into the package as
+      a separate add on unit.
+ 8.  Added the original Scott Baker Macro Keys routines back into the
+      package as a separate add on unit.
+ 9.  Deleted most of the sample programs, which were from Scott Baker,
+      because they did not compile correctly with DDPlus.
+10.  Added new sample door programs that DO compile correctly and show you
+      how it is done.
+11.  Added a Turbo Vision skelton program you can use to make your own
+      mousable configuration/editor/setup programs to support your doors.
+12.  Added the Error Log Unit (used to be part of Misc.pas) as a separate
+      add on utility unit and completely revised it to make it much
+      easier to install in your programs.
+13.  Revised and updated the sample sysop docs which you can edit and
+      make your own.
+14.  A new version of the DDSETUP.EXE program is included which no longer
+     requires the separate supporting files. FREEWARE and you can
+     distribute with your own door program packages.
+15.  Included BOOK.TXT which gives you a list of some very useful Borland
+      TP books and where you can get them.
+
+7.1 - Bug fix and maintenance update/revision:
+
+1.  Some authors want to have their door run maintenance.  The maintenance
+mode now is set and does not access a dropfile.  But the author must
+still check for bbs_software=0 to flag this as a maintenance run.
+
+              "/F"      This is a generic maintenance mode. It logs
+          into the game with the name "SYSTEM MAINTENANCE" in local mode.
+          You can use it if your program requires a nightly maintenance
+          or something similar.
+
+              "/H"      This is a generic maintenance mode. It logs
+          into the game with the name "SYSTEM MAINTENANCE" in local mode.
+          You can use it if your program requires a nightly maintenance
+          or something similar.
+
+2.  It is left to the programmer now to either block these options or to use
+them to actually do something when switched.
+
+3.  Since release of 7.0 we have received the specifications on how to set the
+baud rate for highspeed bnu fossils.  Now port speeds of 57,600 and 115,200
+for both X00 and BNU can be handled by either the FOSSIL or the XFOSSIL
+options.  Once again FOSSIL will initialize the detected fossil to the
+port speed and XFOSSIL will accept the fossil as-is with no initialization.
+
+4.  Detect multi-taskers now check for OS/2 first then other taskers.
+
+5.  We have added int $28 to the Os/2 timeslicer.  This gives up the time
+slice as well as idles dos while waiting for character input per any Int $21
+call.
+
+6.  In addition the Dorinfo# now will be set from '1'..'9','A'..'Z' depending
+on the node number.
+
+7.  New BBS type DORINFO1 uses the dorinfo1.def for dropfile name.
+PCBoard 12 and Callinfo support hereith ends. These two obsolete dropfiles
+are no longer supported.
+
+8.  Digiboard driver direct support.  Use the 'Digi' control in the .CTL
+file to turn this on.  Make sure to comment out the fossil and xfossil
+options.
+
+9.  DDansi2 was having a problem displaying some blinking graphics. 
+Fixed this.
+
+10. DDSetup changed to support above ctl file modifications.
+
+11. The package contains the following updated TP units.
+    DDPLUS.PAS
+    COMIO.PAS
+    DDANSI2.PAS
+   *DDIGI.PAS
+    DDFOSSIL.PAS
+    DDOVR.PAS
+    DDOVR2.PAS
+    DDSCOTT.PAS
+
+    * = New unit to the DDPlus package.
+
+12.  Caution: The digiboard support has only been tested on two
+different WC digiboards.  It hasn't been tested on PCBoard nor
+the Major BBS digi thing. This release of the DDIGI unit is to
+allow door authors to run betas on these changes before doing
+full releases.
+
+                         

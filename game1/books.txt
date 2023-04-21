@@ -1,0 +1,55 @@
+                      RECOMMENDED TURBO PASCAL BOOKS
+                                    BY
+                                BOB DALTON
+                      ------------------------------
+
+      The books below, listed in no particular order, are ones that
+      I have found to be very valuable in helping me program with
+      Turbo Pascal from Borland and I use them often:
+
+      1.  Turbo Pascal 6 Disk Tutor by Werber Feibel
+          ISBN 0-07-881738-2
+          Remarks: This book taught me how to program with TP and
+          is in constant, dog earred, use on my desk.
+          Note:  Comes with a companion disk will all source code
+          shown in the book!
+
+      2.  Programming with Turbo Vision by Blake Watson
+          ISBN 1-55851-399-X
+          Remarks:  This book opened my eyes and made me appreciate
+          what Turbo Vision could do for me.
+          Note:  Comes with a companion disk will all source code
+          shown in the book!
+      
+      3.  PC Intern by Michael Tischer
+          ISBN 1-55755-145-6
+          Remarks: All the nitty gritty hard core stuff you could
+          ever want to know about the PC (up to Pentium) and DOS
+          (up to version 6.2)
+          Note:  Comes with a companion disk will all source code
+          shown in the book!
+
+      4.  PC Magazine Turbo Pascal 6.0 Techniques and Utilities
+           by Neil J. Rubenking
+          ISBN 1-56276-010-6
+          Remarks: Taught me a lot about advanced procedures and
+          efficient methods of programming.
+          Note:  Comes with a companion disk will all source code
+          shown in the book!
+
+      5.  Mastering Turbo Pascal 6.0 by Scott D. Palmer
+          Remarks: Next step up from the Tutor book above and I use
+          it ALL the time.
+          ISBN 0-89588-675-8
+ 
+      Where can you get these books?  I would recommend from CompuBooks
+      out of Cedar Creek, Texas.  There prices tend to be about 15%
+      lower then normal retail and they give good service. They can be
+      reached at their order line at 1-800-880-6818 or 1-512-321-9652.
+      You can also buy books from them on CompuServe. Just type GO CBK.
+      There Internet address is:  70007.1333@CompuServe.com
+      There mailing address is:
+
+      CompuBooks
+      Route 1, Box 271-D
+      Cedar Creek, Texas, 78612-9733  USA
