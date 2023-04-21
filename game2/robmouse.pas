@@ -1,0 +1,59 @@
+unit RobMouse;
+
+interface
+
+function MouseInstalled:boolean;
+function MouseX:word;
+function MouseY:word;
+function LeftPressed:boolean;
+function RightPressed:boolean;
+function MousePressed:boolean;
+function MouseInArea(l,t,r,b:word):boolean;
+procedure MouseSensetivity(x,y:word);
+procedure MouseWindow(l,t,r,b:word);
+procedure SetMousePos(x,y:word);
+procedure ShowMouse;
+procedure HideMouse;
+
+implementation
+
+function MouseInstalled:boolean; assembler; asm
+  xor ax,ax; int 33h; cmp ax,-1; je @skip; xor al,al; @skip: end;
+
+function MouseX:word; assembler; asm
+  mov ax,3; int 33h; mov ax,cx end;
+
+function MouseY:word; assembler; asm
+  mov ax,3; int 33h; mov ax,dx end;
+
+function LeftPressed:boolean; assembler; asm
+  mov ax,3; int 33h; and bx,1; mov ax,bx end;
+
+function RightPressed:boolean; assembler; asm
+  mov ax,3; int 33h; and bx,2; mov ax,bx end;
+
+function MousePressed:boolean; assembler; asm
+  mov ax,3; int 33h; and bx,3; mov ax,bx end;
+
+function MouseInArea(l,t,r,b:word):boolean;
+begin
+  if (MouseX>=l) and (MouseY>=t) and (MouseX<=r) and (MouseY<=b) then MouseInArea:=true else MouseInArea:=false;
+end;
+
+procedure MouseSensetivity(x,y:word); assembler; asm
+  mov ax,1ah; mov bx,x; mov cx,y; xor dx,dx; int 33h end;
+
+procedure MouseWindow(l,t,r,b:word); assembler; asm
+  mov ax,7; mov cx,l; mov dx,r; int 33h; mov ax,8
+  mov cx,t; mov dx,b; int 33h end;
+
+procedure SetMousePos(x, y: word); assembler; asm
+  mov ax,04h; mov cx,x; mov dx,y; int 33h end;
+
+procedure ShowMouse; assembler; asm
+  mov ax,01h; int 33h end;
+
+procedure HideMouse; assembler; asm
+  mov ax,02h; int 33h end;
+
+end.
